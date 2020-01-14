@@ -1,7 +1,7 @@
 #! /usr/bin/env Rscript
 
 
-
+get_data <- function(file, sep = "\t", quote = "", header = TRUE, stringsAsFactors = TRUE, comment.char = "", complete = TRUE){
 #' Method used to load a table from a file and remove not complete entries
 #'
 #' @param file to be loaded
@@ -12,8 +12,7 @@
 #' @param comment.char character used as comment flag into file
 #' @param complete if TRUE, only complete cases will be returned
 #' @return the laoded and filtered data contained into given file
-#' @author refactored by Fernando Moreno Jabato \email{fmjabato@@gmail.com}. Original author Pedro Seoane Zonjic
-get_data <- function(file, sep = "\t", quote = "", header = TRUE, stringsAsFactors = TRUE, comment.char = "", complete = TRUE){
+#' @author refactored by Fernando Moreno Jabato \email{jabato@uma.es}. Original author Pedro Seoane Zonjic
     # Load raw data
     raw <- read.table(file   = file, 
                       sep    = sep,
@@ -32,26 +31,35 @@ get_data <- function(file, sep = "\t", quote = "", header = TRUE, stringsAsFacto
 
 
 
+get_best_thresold <- function(perf,echo = FALSE, prec_rec = FALSE){
 #' Calculate the best threeshold for a given performance and write it as a text in the output channel
 #' 
 #' @param perf performance object from ROCR package
 #' @author Pedro Seoane Zonjic
-get_best_thresold <- function(perf){
     accuracy <- unlist(slot(perf, "y.values"))
     thresolds <- unlist(slot(perf, "x.values"))
-    max_ac <- max(accuracy)
+    if(!prec_rec){
+        max_ac <- max(accuracy)        
+    }else{
+        max_ac <- min(accuracy)
+    }
     best_thresold <- max(thresolds[which(accuracy %in% max_ac)])
-    print(best_thresold)
+    if(echo){
+        print(best_thresold)        
+    }
+    return(best_thresold)
 }
 
 
 
 
+drawing_ROC_curves <- function(file, tags, series, series_names = NULL, graphname, method, xlimit, ylimit, format, label_order = NULL, compact_graph = TRUE, legend = TRUE, cutOff = FALSE, rate, exportMeasures = FALSE){
 #' Generate ROC curves from a dataframe given and render it out into a file
 #'
 #' @param file file with predictions and success values
 #' @param tags Success values column indexes (number and/or numeric values)
 #' @param series Prediction column indexes (number and/or numeric values)
+#' @param series_names Prediction column names to be plotted
 #' @param graphname output file basename (extension is added automatically)
 #' @param method graph type. Allowed: 'ROC' and 'prec_rec'
 #' @param xlimit graph X-axis limits
@@ -62,9 +70,11 @@ get_best_thresold <- function(perf){
 #' @param legend show, or not, the legend
 #' @param cutOff if TRUE, cutoff curves are plotted and RATE measure is used
 #' @param rate measure to plot. ONLY USED when cutOff is true
+#' @param exportMeasures flag to export emasures
+#' @import ROCR and zoo packages
 #' @importFrom ROCR prediction performance
-#' @author refactored by Fernando Moreno Jabato \email{fmjabato@@gmail.com}. Original author Pedro Seoane Zonjic
-drawing_ROC_curves <- function(file, tags, series, graphname, method, xlimit, ylimit, format, label_order,compact_graph = TRUE, legend = TRUE, cutOff = FALSE, rate){
+#' @author refactored by Fernando Moreno Jabato \email{jabato@uma.es}. Original author Pedro Seoane Zonjic
+
     # Load necessary packages
     require(ROCR)
 
@@ -73,11 +83,10 @@ drawing_ROC_curves <- function(file, tags, series, graphname, method, xlimit, yl
 		x_axis_measure="fpr"
 		y_axis_measure="tpr"
         legend_position="bottomright"
-	}
-	else if(method == 'prec_rec'){
+	}else if(method == 'prec_rec'){
 		x_axis_measure="rec"
 		y_axis_measure="prec"
-        legend_position="topright"
+        legend_position="bottomleft"
 	}else if(method == 'cut'){
         legend_position="bottomleft"
     }else{
@@ -99,6 +108,10 @@ drawing_ROC_curves <- function(file, tags, series, graphname, method, xlimit, yl
     # Prepare legend container
     legend_tag <- c()
 
+    # Prepare measures to be exported
+    if(exportMeasures){
+        measures_df <- data.frame(Serie = character(), Measure = character(), Value = numeric(), stringsAsFactors = FALSE)      
+    }
     for(i in seq_along(file)){
         # Load file
         table <- get_data(file[i])
@@ -108,10 +121,16 @@ drawing_ROC_curves <- function(file, tags, series, graphname, method, xlimit, yl
         serie <- table[,series[[i]]]
 
         # Create a prediction object
-        pred <- prediction(serie, hits, label_order)
+        if(is.null(label_order)){
+            pred <- prediction(serie, hits, label_order)
+        }else{
+            pred <- prediction(serie, hits, unlist(strsplit(label_order[i],",")))
+        }
+        
+
         if(cutOff){ # Plot cutoff curves
             perf <- performance(pred, measure = rate)
-            get_best_thresold(perf)
+            get_best_thresold(perf,echo=TRUE)
         }else{
             perf <- performance(pred, measure = y_axis_measure, x.measure =  x_axis_measure)
         }
@@ -123,9 +142,68 @@ drawing_ROC_curves <- function(file, tags, series, graphname, method, xlimit, yl
         if(method == 'ROC'){
             AUC <- performance(pred, measure = "auc")
             AUC <- unlist(slot(AUC, 'y.values'))
-            legend_tag <- c(legend_tag, paste(series[[i]], '=', round(AUC, 3), sep=' '))
+            auc <- AUC
+            legend_tag <- c(legend_tag, paste(series_names[[i]], '(AUC = ', round(AUC, 3),')', sep=''))
+        }else if(method == 'prec_rec'){
+            require(zoo)
+            precission <- perf@y.values[[1]][-1]
+            recall <- perf@x.values[[1]][-1]
+            id <- order(recall)
+            AUC <- sum(diff(recall[id])*rollmean(precission[id],2))
+            prauc <- AUC
+            legend_tag <- c(legend_tag, paste(series_names[[i]], '(AUC-PR = ', round(AUC, 3),')', sep=''))
         }else{
-            legend_tag <- c(legend_tag, series[[i]])
+            legend_tag <- c(legend_tag, series_names[[i]])
+        }
+
+        # Calculare measures to export
+        if(exportMeasures){
+            # Find best f-measure value
+            f_measures <- performance(pred, measure = 'f')
+            best_f <- max(unlist(f_measures@y.values), na.rm = TRUE) 
+            best_f_indx <- which(unlist(f_measures@y.values) == best_f)
+
+            # Obtain target measures
+            measures <- c("acc","tpr","tnr","fpr","fnr")
+            measure_values <- unlist(lapply(measures,function(m){
+                meas <- performance(pred, measure = m)
+                unlist(slot(meas, 'y.values'))[best_f_indx]
+            }))
+
+            measure_references <- rep("Max f-measure",length(measures))
+
+            # Add f-measure
+            measures <- c("f-measure", measures)
+            measure_values <- c(best_f,measure_values)
+            measure_references <- c("Max f-measure", measure_references)
+
+            # Add X,y values
+            measures <- c(measures,"x-val","y-val")
+            measure_values <- c(measure_values,unlist(perf@x.values)[best_f_indx],unlist(perf@y.values)[best_f_indx])
+            measure_references <- c(measure_references,"Max f-measure","Max f-measure")
+
+
+            # AUC
+            if(exists("auc")){
+                measures <- c(measures,"auc")
+                measure_values <- c(measure_values,auc)
+                measure_references <- c(measure_references,"All")
+            }
+            # PR-AUC
+            if(exists("prauc")){
+                measures <- c(measures,"prauc")
+                measure_values <- c(measure_values,prauc)
+                measure_references <- c(measure_references,"All")
+            }
+
+
+            # Create DF and concat
+            res <- data.frame(Serie = rep(series_names[[i]],length(measures)),
+                              Reference = measure_references,
+                              Measure = measures,
+                              Value = measure_values,
+                              stringsAsFactors = FALSE)
+            measures_df <- rbind(measures_df,res)
         }
     } # END i FOR
 
@@ -134,4 +212,10 @@ drawing_ROC_curves <- function(file, tags, series, graphname, method, xlimit, yl
         legend(legend_position, legend=legend_tag, col=colors, lwd=2)                      
     }
     dev.off()    
+
+    # Export measures
+    if(exportMeasures){
+        # Export target measures
+        write.table(measures_df,file = paste(graphname,"_measures", sep = ""), col.names = TRUE, row.names = FALSE, sep = "\t", quote = FALSE)
+    }
 }

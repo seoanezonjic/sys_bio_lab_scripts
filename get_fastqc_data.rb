@@ -127,6 +127,15 @@ def get_weighted_mean_with_intervals(data, col_val, col_weigth)
     end
     return sum_product.to_f/total_weigth
 end
+
+def parse_distributions(two_column_table)
+    distribution_arr = []
+    two_column_table.each do |row|
+        distribution_arr << row.join(",")
+    end
+    distribution_string = distribution_arr.join(":")
+    return distribution_string
+end
 #################################################################################################
 ## INPUT PARSING
 #################################################################################################
@@ -134,7 +143,7 @@ options = {}
 
 optparse = OptionParser.new do |opts|
         options[:input] = nil
-        opts.on( '-i', '--input_file PATH', 'File to process' ) do |string|
+        opts.on( '-i PATH', '--input_file PATH', 'File to process' ) do |string|
             options[:input] = string
         end
 
@@ -168,7 +177,7 @@ optparse.parse!
 ##########################################################################################################
 
 all_stats = []
-header = %w{total_sequences read_max_length read_min_length %gc mean_qual_per_base min_qual_per_base_in_lower_quartile min_qual_per_base_in_10th_decile weigthed_qual_per_sequence mean_indeterminations_per_base weigthed_read_length}
+header = %w{total_sequences read_max_length read_min_length %gc mean_qual_per_base min_qual_per_base_in_lower_quartile min_qual_per_base_in_10th_decile weigthed_qual_per_sequence mean_indeterminations_per_base weigthed_read_length sequence_length_distribution}
 Dir.glob(options[:input]).each do |file|
     modules = parse_fastqc_data(Zip::ZipFile.new(file).read(File.join(File.basename(file, '.zip'), "fastqc_data.txt")))
     stats = []
@@ -182,6 +191,7 @@ Dir.glob(options[:input]).each do |file|
     stats << get_weighted_mean(modules['quality_per_sequence'], 0,1)
     stats << get_mean(modules['indeterminations_per_base'], 1)
     stats << get_weighted_mean_with_intervals(modules['sequence_length_distribution'], 0,1)
+    stats << parse_distributions(modules['sequence_length_distribution'])
     all_stats << stats
 end
 
@@ -189,11 +199,19 @@ n_samples = all_stats.length
 n_parameters = header.length
 means = []
 n_parameters.times do |parameter_index|
-    sum = 0
-    n_samples.times do |sample_index|
-        sum += all_stats[sample_index][parameter_index]
+    if header[parameter_index] == 'sequence_length_distribution'
+        all_distributions = []
+        n_samples.times do |sample_index|
+            all_distributions << all_stats[sample_index][parameter_index]
+        end
+        means << all_distributions.join(";")
+    else
+        sum = 0
+        n_samples.times do |sample_index|
+            sum += all_stats[sample_index][parameter_index]
+        end
+        means << sum.to_f/n_samples
     end
-    means << sum.to_f/n_samples
 end
 if !options[:transpose]
 	puts header.join("\t") if options[:header]
