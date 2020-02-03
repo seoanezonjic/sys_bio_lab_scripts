@@ -12,9 +12,14 @@ def load_target(file)
 		fields = line.split("\t")
 		if count == 0
 			replicates_position = fields.index('replicate')
+			replicates_position = -1 if replicates_position.nil? # Replicates column was not found
 			treatment_position = fields.index('treat')
 		else
-			samples << [fields.first, fields[replicates_position], fields[treatment_position]]
+			if replicates_position == -1 # Replicates column was not found
+				samples << [fields.first, nil, fields[treatment_position]]
+			else
+				samples << [fields.first, fields[replicates_position], fields[treatment_position]]
+			end
 
 		end
 		count += 1
