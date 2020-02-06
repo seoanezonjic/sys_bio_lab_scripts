@@ -24,7 +24,7 @@ def load_and_clean_file(files_array, ind_seq_size)  #need to create a empty hash
 				seq << line
 			end 
 		end
-		sequences[name.split(/\s/).first] = seq
+		sequences[name.split(/\s/).first] = seq if !name.nil? && !seq.empty?
 		all_fastas[file] = sequences
 	end
 	return all_fastas
@@ -37,6 +37,7 @@ def discard_seqs_from_list(all_fastas, discarded_list_filename)
 			sequences.delete(sequence)
 		end
 	end
+	return all_fastas
 end
 
 def select_seqs_from_list(all_fastas, acepted_list_filename)
@@ -44,6 +45,7 @@ def select_seqs_from_list(all_fastas, acepted_list_filename)
 	all_fastas.each do |filename, sequences|
 		sequences.reject! { |name, seq| !sequences_to_acept.include?(name) }
 	end
+	return all_fastas
 end
 
 def load_list(filename)
@@ -201,6 +203,16 @@ def get_max_and_min_GC_content(all_fastas)
 	end
 end
 
+def sequence_lengths(out_filename, all_fastas)
+	File.open(out_filename, 'w') do |outfile|
+		all_fastas.each do |filename, fastas|
+			fastas.each do |id, seq|
+				outfile.puts "#{id}\t#{seq.length}"
+			end
+		end
+	end
+end
+
 def load_fragments_table(files)
 	fragments = []
 	files.each do |file|
@@ -235,23 +247,29 @@ def find_fragments(all_fastas, fragments, tail_length) #fragments is an array of
 	return output_fasta
 end
 
-def generate_new_id(main_operating_hash_of_sequences)
+def generate_new_id(main_operating_hash_of_sequences, new_names = '') #new_names is a hash hat contains names of main_operating_hash_of_sequences as keys and new names as factors
+	
 	new_main_operating_hash_of_sequences = {}
 	seq_number = 1
 	main_operating_hash_of_sequences.each do |filename, fastas| 
 		new_fastas = {}
 		fastas.each do |id, seq|
-			new_seq_name = "seq_#{seq_number}"
+			new_seq_name = id
+			if new_names.empty? 
+				new_seq_name = "seq_#{seq_number}"
+			elsif new_seq_name == "CLEAN"
+				new_seq_name = new_seq_name.split(" ").first
+			#else
+			#	new_seq_name = new_sequences[id] if !new_sequences[id].nil?
+			end
 			new_fastas[new_seq_name] = seq
 			seq_number += 1
-			puts "#{id}\t#{new_seq_name}"
 		end
 		new_main_operating_hash_of_sequences[filename] = new_fastas
 	end
 	puts "\n"
 	return new_main_operating_hash_of_sequences
 end
-
 
 
 ## output methods 
@@ -343,9 +361,9 @@ OptionParser.new do  |opts|
 	end
 
 	options[:filter_larger_seqs] = ''
-	opts.on("-L INTEGER", "--filter-larger", "Discard sequences larger than INTEGER, and save it in 'FILENAME_larger_seqs.fasta'. Then the script works only whith the smaller sequences") do |integer|
-		options[:filter_larger_seqs] = integer
-	end
+	# opts.on("-L INTEGER", "--filter-larger", "Discard sequences larger than INTEGER, and save it in 'FILENAME_larger_seqs.fasta'. Then the script works only whith the smaller sequences") do |integer|
+	# 	options[:filter_larger_seqs] = integer
+	# end
 
 	options[:filter_smaller_seqs] = ''
 	opts.on("-S INTEGER", "--filter-smaller", "Discard sequences smaller than INTEGER, and save it in 'FILENAME_smaller_seqs.fasta, Then the script works only whith the larger sequences' ") do |integer|
@@ -361,9 +379,9 @@ OptionParser.new do  |opts|
 		options[:sequences_to_accept] = filename
 	end
 
-	options[:rename] = false
-	opts.on("-r", "--rename", "Rename sequences") do
-		options[:rename] = true
+	options[:rename] = nil
+	opts.on("-r FILE", "--rename FILE", "Rename sequences. Use a custom tag for sequences.For use default name set an empty string as attribute (''). If argument is set as 'CLEAN', the program will return a fasta file with original names but only with the first word instead of a space") do |file|
+		options[:rename] = file
 	end
 
 	options[:sequence_statistics] = false
@@ -374,6 +392,10 @@ OptionParser.new do  |opts|
 	options[:content] = false
 	opts.on("-c", "--content", "Return GC content of each sequence") do
 		options[:content] = true
+	end
+	options[:length] = ''
+	opts.on("-L FILE", "--length FILE", "Return file with sequences legth") do |file|
+		options[:length] = file
 	end
 
 	opts.on("-m MOTIF1,MOTIF2,MOTIF3", "--motif", "Find a motif") do |m|
@@ -428,12 +450,13 @@ else
 	sequences_to_process = all_fastas
 end
 
-sequences_to_process = generate_new_id(sequences_to_process) if options[:rename]
+sequences_to_process = generate_new_id(sequences_to_process, options[:rename]) if !options[:rename].nil?
 
 get_per_sequence_statistics(sequences_to_process) if options[:sequence_statistics]
 get_max_and_min_GC_content(sequences_to_process) if options[:content]
 get_n50(sequences_to_process) if options[:n50]
 
+sequence_lengths(options[:length], sequences_to_process) if !options[:length].empty?
 fastas_motifs = {}
 if options[:motif]
 	motifs = load_motifs(options[:motif])
@@ -445,18 +468,20 @@ if options[:motif]
 	end	
 end
 
+if !options[:output].empty?
 
-if options[:create].include?('a')
-	output_fasta = sequences_to_process 
-elsif options[:create].include?('m')
-	if options[:create].include?('h')
-		output_fasta = format_output_with_sequences_with_motifs_header(sequences_to_process, fastas_motifs)
-	else
-		output_fasta = format_output_with_sequences_with_motifs(sequences_to_process, fastas_motifs) 
+	if options[:create].include?('a')
+		output_fasta = sequences_to_process 
+	elsif options[:create].include?('m')
+		if options[:create].include?('h')
+			output_fasta = format_output_with_sequences_with_motifs_header(sequences_to_process, fastas_motifs)
+		else
+			output_fasta = format_output_with_sequences_with_motifs(sequences_to_process, fastas_motifs) 
+		end
 	end
-end
 
-save_output_in_a_file(options[:output], output_fasta) if !options[:output].empty?
+	save_output_in_a_file(options[:output], output_fasta)
+end
 
 	
 
