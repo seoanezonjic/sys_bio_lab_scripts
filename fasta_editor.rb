@@ -21,9 +21,11 @@ def load_and_clean_file(files_array, ind_seq_size)  #need to create a empty hash
 				seq = ''
 				name = line.gsub('>', '')
 			else
+				line = line.gsub(/[^actgnACTGN]/,"N")
 				seq << line
 			end 
 		end
+
 		sequences[name.split(/\s/).first] = seq if !name.nil? && !seq.empty?
 		all_fastas[file] = sequences
 	end
