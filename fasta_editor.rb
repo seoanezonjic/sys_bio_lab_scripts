@@ -101,7 +101,6 @@ end
 
 def get_per_sequence_statistics(all_fastas)
 	all_fastas.each do |filename, fastas|
-		puts filename
 		fastas.each do |id, seq|
 			gc_content = nil
 			type = nil
@@ -324,14 +323,42 @@ def format_output_with_sequences_with_motifs_header(all_fastas, fastas_motifs)  
 	return output_fasta
 end
 
-def save_output_in_a_file(filename, output_fasta)
+def save_output_in_a_file(filename, output_fasta, chunk_size = nil)
 	File.open(filename, 'w') do |file|
 		output_fasta.each do |filename, fastas|
 			fastas.each do |id, seq|
-				file << ">#{id.split('_seq_num_fasta_editor_')[0]}\n#{seq}\n" if !id.nil?
+				next if id.nil?
+				seq_length = seq.length
+				file.puts ">#{id.split('_seq_num_fasta_editor_')[0]}"
+				
+				if chunk_size.nil?
+					file.puts seq
+				else
+					start = 0
+					stop = chunk_size
+					iterations = (seq_length/chunk_size).ceil
+					iterations.times do |n|
+						padding = 1
+						padding = 0 if n == iterations # Last segment mus include the last character
+						file.puts seq[start..stop-padding]
+						start += chunk_size
+						stop += chunk_size
+					end 
+				end
 			end
 		end
 	end
+end
+
+def split_seq(seq, max_size)
+	splitted_seq = []
+	seq_cp = seq
+	p seq.length
+	while !seq_cp.empty?
+		p seq_cp.length
+		splitted_seq << seq_cp.slice!(0, max_size)
+	end 
+	return splitted_seq
 end
 
 
@@ -412,6 +439,11 @@ OptionParser.new do  |opts|
 	options[:translate] = false
 	opts.on("-t", "--translate", "Translate the sequences") do 
 		options[:translate] = true
+	end	
+
+	options[:split] = nil
+	opts.on("--split INTEGER", "Split sequences in different lines of length INTEGER") do |length|
+		options[:split] = length.to_i
 	end
 
 
@@ -482,7 +514,7 @@ if !options[:output].empty?
 		end
 	end
 
-	save_output_in_a_file(options[:output], output_fasta)
+	save_output_in_a_file(options[:output], output_fasta, options[:split])
 end
 
 	

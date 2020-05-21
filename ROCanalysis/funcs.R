@@ -120,7 +120,11 @@ drawing_ROC_curves <- function(file, tags, series, series_names = NULL, graphnam
         hits <- table[,tag]
         serie <- table[,series[[i]]]
 
-        # Create a prediction object
+ 	# Prepare set
+        hits <- as.numeric(hits)
+        serie <- as.numeric(serie)
+        
+	# Create a prediction object
         if(is.null(label_order)){
             pred <- prediction(serie, hits, label_order)
         }else{
