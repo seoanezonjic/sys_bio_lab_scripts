@@ -89,7 +89,8 @@ valid_positions <- c()
 correction_factor <- 0
 for(i in qualitative_data_positions){
 	index <- i - correction_factor
-	factor_col <- data_table[ , index]
+	factor_col <- factor(data_table[ , index])
+	data_table[ , index] <- factor_col
 	if(!is.null(row_refs)){
 		factor_col <- factor_col[-row_refs]
 		factor_col <- droplevels(factor_col)

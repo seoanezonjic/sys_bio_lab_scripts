@@ -231,14 +231,22 @@ def find_fragments(all_fastas, fragments, tail_length) #fragments is an array of
 		output_seq = {}
 		fastas.each do |id, seq|
 			fragment_number = 0
-			fragments.each do |name, start, stop|
+			fragments.each do |fragment|
+				name = fragment[0]
+				start = fragment[1] 
+				stop = fragment[2]
 				if id == (name)
 					fragment_number += 1
 					starting = start.to_i - tail_length - 1
 					starting = 0 if starting < 0
 					ending = stop.to_i + tail_length - 1
 					ending = seq.size - 1 if ending > seq.size
-					seq_name = "#{name}:#{starting + 1}:#{ending + 1}_seq_num_fasta_editor_#{fragment_number}"
+					p fragment
+					if fragment[3].nil?
+							seq_name = "#{name}:#{starting + 1}:#{ending + 1}_seq_num_fasta_editor_#{fragment_number}"
+					else
+							seq_name = fragment[3]
+					end
 					output_seq[seq_name] = seq[starting..ending]
 				end
 			end
@@ -254,16 +262,22 @@ def generate_new_id(main_operating_hash_of_sequences, new_names = '') #new_names
 	seq_number = 1
 	main_operating_hash_of_sequences.each do |filename, fastas| 
 		new_fastas = {}
-		fastas.each do |id, seq|
+		ids = fastas.keys
+		ids.each do |id|
 			new_seq_name = id
-			if new_names.empty? 
-				new_seq_name = "seq_#{seq_number}"
-			elsif new_seq_name == "CLEAN"
+			if new_seq_name == "CLEAN"
 				new_seq_name = new_seq_name.split(" ").first
-			#else
-			#	new_seq_name = new_sequences[id] if !new_sequences[id].nil?
+			elsif File.file?(new_names)
+				new_sequences = {}
+				File.open(new_names).each do |line|
+					line = line.chomp.split("\t")
+					new_sequences[line[0]] = line[1]
+				end
+				new_seq_name = new_sequences[id] if !new_sequences[id].nil?
+			else
+				new_seq_name = "seq_#{seq_number}"
 			end
-			new_fastas[new_seq_name] = seq
+			new_fastas[new_seq_name] = fastas[id]
 			seq_number += 1
 		end
 		new_main_operating_hash_of_sequences[filename] = new_fastas
@@ -361,6 +375,30 @@ def split_seq(seq, max_size)
 	return splitted_seq
 end
 
+def do_overlap(coord_A, coord_B, distance = 0) 
+	coord_A.sort!
+	coord_B.sort!
+	overlap = false
+	overlap = true if coord_B.min.between?(coord_A.min, coord_A.max + distance) ||
+		coord_A.min.between?(coord_B.min, coord_B.max + distance)
+	return(overlap)
+end
+
+
+def correct_coord(all_coord)
+	formatted_coords = {}
+	if all_coord.first.length == 4
+		
+		all_coord.each do |chr, c_start, c_end, name|
+			name = name.to_s
+			formatted_coords[name] = [] if formatted_coords[name].nil?
+			formatted_coords[name] << [chr, c_start, c_end]
+		end
+	else
+		formatted_coords[""]	
+	end
+
+end
 
 
 #############################################################################################################################
@@ -381,7 +419,7 @@ OptionParser.new do  |opts|
 	end
 
 	options[:fragments] = nil
-	opts.on("-f FILE1,FILE2,FILE3", "--fragments", "Find fragments in fasta sequences") do |f|
+	opts.on("-f FILE1,FILE2,FILE3", "--fragments", "Find fragments in fasta sequences. It takes one or more tabulated files with 'chromosome_name\tstart_position\tend_position'. A fourth column with fragment name can be optionally added") do |f|
 		options[:fragments] = f.split(",")
 	end
 	options[:tail] = 0
