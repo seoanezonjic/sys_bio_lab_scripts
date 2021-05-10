@@ -241,7 +241,7 @@ def find_fragments(all_fastas, fragments, tail_length) #fragments is an array of
 					starting = 0 if starting < 0
 					ending = stop.to_i + tail_length - 1
 					ending = seq.size - 1 if ending > seq.size
-					p fragment
+					#p fragment[3]
 					if fragment[3].nil?
 							seq_name = "#{name}:#{starting + 1}:#{ending + 1}_seq_num_fasta_editor_#{fragment_number}"
 					else

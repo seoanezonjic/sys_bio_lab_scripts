@@ -53,7 +53,7 @@ get_best_thresold <- function(perf,echo = FALSE, prec_rec = FALSE){
 
 
 
-drawing_ROC_curves <- function(file, tags, series, series_names = NULL, graphname, method, xlimit, ylimit, format, label_order = NULL, compact_graph = TRUE, legend = TRUE, cutOff = FALSE, rate, exportMeasures = FALSE){
+drawing_ROC_curves <- function(file, tags, series, series_names = NULL, graphname, method, xlimit, ylimit, format, label_order = NULL, compact_graph = TRUE, legend = TRUE, cutOff = FALSE, rate, legendPos = NULL, exportMeasures = FALSE){
 #' Generate ROC curves from a dataframe given and render it out into a file
 #'
 #' @param file file with predictions and success values
@@ -70,6 +70,7 @@ drawing_ROC_curves <- function(file, tags, series, series_names = NULL, graphnam
 #' @param legend show, or not, the legend
 #' @param cutOff if TRUE, cutoff curves are plotted and RATE measure is used
 #' @param rate measure to plot. ONLY USED when cutOff is true
+#' @param legendPos position of legend. If NULL, defualt will be used. Allowed: bottomright, bottomleft, topright, topleft
 #' @param exportMeasures flag to export emasures
 #' @import ROCR and zoo packages
 #' @importFrom ROCR prediction performance
@@ -82,13 +83,25 @@ drawing_ROC_curves <- function(file, tags, series, series_names = NULL, graphnam
 	if(method == 'ROC'){
 		x_axis_measure="fpr"
 		y_axis_measure="tpr"
-        legend_position="bottomright"
+        if(is.null(legendPos)){
+            legend_position="bottomright"
+        }else{
+            legend_position=legendPos
+        }
 	}else if(method == 'prec_rec'){
 		x_axis_measure="rec"
 		y_axis_measure="prec"
-        legend_position="bottomleft"
+        if(is.null(legendPos)){
+            legend_position="bottomleft"
+        }else{
+            legend_position=legendPos
+        }
 	}else if(method == 'cut'){
-        legend_position="bottomleft"
+        if(is.null(legendPos)){
+            legend_position="bottomleft"
+        }else{
+            legend_position=legendPos
+        }
     }else{
         stop(paste("Method not allowed: ", method, sep = ""))        
     }

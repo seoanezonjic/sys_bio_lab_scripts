@@ -18,7 +18,7 @@ option_list <- list(
 		help="Clustering method to use on HCPC function: "),
 	make_option(c("-d", "--data_file"), type="character", 
 		help="Tabulated file with information about each sample"),
-	make_option(c("-c", "--columns_data"), type="character", 
+	make_option(c("-c", "--columns_data"), type="character", default=NULL, 
 		help="Columns data to use in PCA analysis"),
 	make_option(c("-t", "--quantitative_column_values"), type="character", default="c()",
 		help="Number of column with quantitative values to be analyzed"),
@@ -28,10 +28,10 @@ option_list <- list(
 		help="Set the points to use as reference an calculate the closer points"), 
 	make_option(c("-g", "--group_colors"), type="character", default="", 
 		help="Colorize pca points using the labels of the given column name"), 
-	make_option(c("-k", "--keep_dimensions"), type="integer", default=3, 
+	make_option(c("-k", "--keep_dimensions"), type="integer", default=0, 
 		help="Number of dimensions to keep for analysis"),
-        make_option(c("-C", "--clusters"), type="integer", default=-1,
-                help="Number of clusters to search on PCA data, by default is automatic"),
+    make_option(c("-C", "--clusters"), type="integer", default=-1,
+        help="Number of clusters to search on PCA data, by default is automatic"),
 	make_option(c("-o", "--output"), type="character", default='./PCA_graphic_results', 
 		help="Output path for pdf results"),
 	make_option(c("-I", "--no_investigate"), action="store_true", default=FALSE, 
@@ -41,14 +41,16 @@ option_list <- list(
 
 )
 opt <- parse_args(OptionParser(option_list=option_list))
-
 ################################################################
 ## MAIN
 ################################################################
 
 data_table <- read.table(opt$data_file, sep="\t", header=opt$use_header, row.names=1)
-data_positions_for_PCA <- eval(parse(text=paste('c(', opt$columns_data, ')')))
-print(data_positions_for_PCA)
+if(!is.null(opt$columns_data)){
+	data_positions_for_PCA <- eval(parse(text=paste('c(', opt$columns_data, ')')))
+}else{
+	data_positions_for_PCA <- names(data_table)
+}
 quantitative_data_positions <- eval(parse(text=paste('c(', opt$quantitative_column_values, ')')))
 qualitative_data_positions <- eval(parse(text=paste('c(', opt$qualitative_column_values, ')')))
 active_data <- data_table[ , data_positions_for_PCA]
@@ -84,6 +86,8 @@ if(class(qualitative_data_positions) == 'character'){
 		qualitative_data_positions <- c(1:length(qualitative_data_positions)) + cols_data_table + length(quantitative_data_positions)
 	}
 }
+
+
 # Check if factor columns have more than 1 category
 valid_positions <- c()
 correction_factor <- 0
@@ -105,10 +109,22 @@ for(i in qualitative_data_positions){
 }
 qualitative_data_positions <- valid_positions
 ### PCA ###
-res.pca <- PCA(data_table, ncp=opt$keep_dimensions, scale.unit=TRUE, quanti.sup=quantitative_data_positions, quali.sup=qualitative_data_positions, graph=FALSE, ind.sup=row_refs)
+res.pca <- PCA(data_table, scale.unit=TRUE, quanti.sup=quantitative_data_positions, quali.sup=qualitative_data_positions, graph=FALSE, ind.sup=row_refs)
 
+if(!opt$no_investigate){
+	Investigate(res.pca, file = paste(opt$output, "_Investigate.Rmd", sep=''))
+}
+if(opt$keep_dimensions == 0){
+	keep_dimensions <- dimRestrict(res.pca)
+	if(keep_dimensions < 2){
+		keep_dimensions <- 2
+		message('Significant axis are less than 2. The first two axis will be selected to continue the analysis')
+	}
+}else{
+	keep_dimensions <- opt$keep_dimensions
+}
 #Prepare data for add supp individuals to hcpc (code patch, factominer is unable to do this feature)
-pca_for_hcpc <- PCA(data_table, ncp=opt$keep_dimensions, scale.unit=TRUE, quanti.sup=quantitative_data_positions, quali.sup=qualitative_data_positions, graph=FALSE, ind.sup=row_refs)
+pca_for_hcpc <- PCA(data_table, ncp=keep_dimensions, scale.unit=TRUE, quanti.sup=quantitative_data_positions, quali.sup=qualitative_data_positions, graph=FALSE, ind.sup=row_refs)
 if(!is.null(references)){
 	join <- rbind(pca_for_hcpc$ind$coord, pca_for_hcpc$ind.sup$coord) #join suplemental individuals to show on hcpc
 	join <- join[ order(row.names(join)), ] # reorder to make coord order consistent with X data
@@ -118,10 +134,6 @@ if(!is.null(references)){
 	fill_val <- max(pca_for_hcpc$call$row.w)
 	pca_for_hcpc$call$row.w <- c(pca_for_hcpc$call$row.w, rep(fill_val, length(row_refs)))
 	pca_for_hcpc$call$ind.sup <- NULL
-}
-
-if(!opt$no_investigate){
-	Investigate(res.pca)
 }
 
 res.hcpc <- HCPC(pca_for_hcpc, nb.clust=opt$clusters, graph=FALSE, method=opt$clustering_method)#, iter.max = 20, min = 5)
@@ -176,12 +188,12 @@ if(!is.null(references)){
 
 # prepare data for radar plot
 
-test <- active_data
-MX <- sapply(test, function(x) max(x) )
-MN <- sapply(test, function(x) min(x) )
-test <- rbind(MX, MN, test)
+#test <- active_data
+#MX <- sapply(test, function(x) max(x) )
+#MN <- sapply(test, function(x) min(x) )
+#test <- rbind(MX, MN, test)
 
-COL<-colorRampPalette(c("red", "blue", "green", "orange"))(nrow(test)-2)
+COL<-colorRampPalette(c("red", "blue", "green", "orange"))(nrow(active_data))
 
 options("width"=200) #Print on screen 200 character columns instead of 80
 cat("\n############### HCPC CLUSTERS ################\n")
@@ -191,32 +203,38 @@ cat("\n############### PCA DESCRIPTION ################\n")
 print(dimdesc(res.pca, axes=c(1,2)))
 
 # See http://www.sthda.com/english/wiki/factominer-and-factoextra-principal-component-analysis-visualization-r-software-and-data-mining
-pdf(file= paste(opt$output, '.pdf', sep=''), width=10, height = 10)
-	radarchart(test, pcol=COL)
-	legend("topleft", legend=rownames(test)[-c(1,2)], col=COL, pch = 16, lty = 1)
-	corrplot(correlations, type="upper", order="hclust",
-        	tl.col="black", tl.srt=45, title = "Correlation matrix with active variables")
-        corrplot(correlations, type="upper", order="hclust",
-        	tl.col="black", tl.srt=45, title = "Correlation matrix with active variables", addCoef.col = TRUE, addCoefasPercent = TRUE)
+pdf(file= paste(opt$output, '.pdf', sep=''), width=14, height = 10)
+	radarchart(active_data, pcol=COL, maxmin=FALSE, title='Radar chart with selected variables. Axis are variables and color series are samples')
+	legend("topleft", legend=rownames(active_data), col=COL, pch = 16, lty = 1)
+	corr_title <- "Correlation analysis with selected variables. The corr coef shows the interdependency between variables"
+	corrplot(correlations, type="upper", order="hclust", win.asp=0.75,
+        	tl.col="black", tl.srt=45, title = corr_title)
+    corrplot(correlations, type="upper", order="hclust", win.asp=0.75,
+        	tl.col="black", tl.srt=45, title = corr_title, addCoef.col = TRUE, addCoefasPercent = TRUE)
 	chart.Correlation(active_data, histogram=TRUE, pch=19)
-	plot(hclust(as.dist(1 - abs(correlations/100))))
-	plot.PCA(res.pca, axes=c(1, 2), choix="ind")
-	plot.PCA(res.pca, axes=c(1, 2), choix="ind", label = "none")
+	plot(hclust(as.dist(1 - abs(correlations/100))), main='Correlation similarity between variables represented as dendograme')
+	title <- "PCA representation of 1 and 2 axis. Black points represents individuals and pink squares are the centroids of the analyzed factors"
+	plot.PCA(res.pca, axes=c(1, 2), choix="ind", title=title)
+	plot.PCA(res.pca, axes=c(1, 2), choix="ind", label = "none", title=title)
 	if(opt$group_colors != ""){
 		colors = c("green", "blue", "red", "yellow", 'pink', 'black')
 		plot(res.pca, habillage = opt$group_colors, col.hab = colors, label=c('ind'))
 	}
-	fviz_pca_ind(res.pca, col.ind="cos2") +
+	fviz_pca_ind(res.pca, col.ind="cos2", title='PCA representation of 1 and 2 axis. Colored points represent the contribution of each individual to the PCA dimensions') +
 		scale_color_gradient2(low="white", mid="blue", high="red", midpoint=0.50)
 	#plot.PCA(res.pca, axes=c(1, 2), choix="var")
-	fviz_pca_var(res.pca, col.var="steelblue") +
+	fviz_pca_var(res.pca, axes = c(1, 2), col.var="steelblue", title="Representation of the variable contribution to the PCA axis 1 and 2") +
+		theme_minimal()	
+	fviz_pca_var(res.pca, axes = c(1, 2), alpha.var="contrib", title="Representation of the variable contribution to the PCA axis 1 and 2")+
 		theme_minimal()
-	fviz_pca_var(res.pca, alpha.var="contrib")+
+	fviz_pca_var(res.pca, axes = c(3, 4), col.var="steelblue", title="Representation of the variable contribution to the PCA axis 3 and 4") +
 		theme_minimal()
-	plot(res.hcpc , axes=c(1,2), choice="tree")
-	plot(res.hcpc , axes=c(1,2), choice="map", draw.tree= FALSE)
-	plot(res.hcpc , axes=c(1,2), choice="map", draw.tree= FALSE, label="none")
-	plot(res.hcpc , axes=c(1,2), choice="map")
-	plot(res.hcpc , axes=c(1,2), choice="3D.map")
+	fviz_pca_var(res.pca, axes = c(3, 4), alpha.var="contrib", title="Representation of the variable contribution to the PCA axis 3 and 4")+
+		theme_minimal()
+	plot(res.hcpc , choice="tree", title=paste("Hierarchical clustering of individuals using first", keep_dimensions, "significant PCA dimensions",sep=' '))
+	plot(res.hcpc , axes=c(1,2), choice="map", draw.tree= FALSE, title=paste("PCA representation of 1 and 2 axis with individuals coloured by its cluster membership. The first ", keep_dimensions, "significant PCA dimensions are used for HCPC",sep=' '))
+	plot(res.hcpc , axes=c(1,2), choice="map", draw.tree= FALSE, label="none", title=paste("PCA representation of 1 and 2 axis with individuals coloured by its cluster membership. The first ", keep_dimensions, "significant PCA dimensions are used for HCPC",sep=' '))
+	plot(res.hcpc , axes=c(1,2), choice="map", title=paste("PCA representation of 1 and 2 axis with individuals coloured by its cluster membership. The first ", keep_dimensions, "significant PCA dimensions are used for HCPC",sep=' '))
+	plot(res.hcpc , axes=c(1,2), choice="3D.map", title=paste("PCA representation of 1 and 2 axis with individuals coloured by its cluster membership. The first ", keep_dimensions, "significant PCA dimensions are used for HCPC",sep=' '))
 dev.off()
 
