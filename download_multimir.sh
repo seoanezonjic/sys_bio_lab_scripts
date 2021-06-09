@@ -5,14 +5,13 @@
 output_path=$1 #
 all_organisms=$2 #comma separated organism keys (hsa, mmu)
 source ~soft_bio_267/initializes/init_degenes_hunter
-#export PATH=~josecordoba/software/DEgenesHunter/:$PATH
+export PATH=~josecordoba/software/DEgenesHunter/inst/scripts:$PATH
 mkdir $output_path
-if [ -s $output_path/finished ]; then
-	rm $output_path/finished
-fi
 for organism in `echo $all_organisms | tr "," " "`; do
-	while [ ! -s $output_path/finished ]; do
-		download_multiMiR.R -s 50 -O $organism -o $output_path -c #&> $output_path/multimir_log
+	check_file=$output_path/`echo $organism`_finished
+	rm -r $output_path/`echo $organism`_multimir_err
+	while [ ! -s $check_file ]; do
+		download_multiMiR.R -s 50 -O $organism -o $output_path -c &>> $output_path/`echo $organism`_multimir_err
 	done
-	rm -r $output_path/finished
+	rm -r $check_file
 done
