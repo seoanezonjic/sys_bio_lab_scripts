@@ -4,7 +4,7 @@ require 'optparse'
 
 options = {}
 OptionParser.new do |opts|
-  opts.banner = "Usage: #{__FILE__} [options]"
+	opts.banner = "Usage: #{File.basename(__FILE__)} [options]"
 
   options[:input] = nil
   opts.on("-i", "--input_file PATH", "Path to input file") do |item|
@@ -14,6 +14,11 @@ OptionParser.new do |opts|
   options[:col_index] = nil
   opts.on("-x", "--column_index INTEGER", "Column index (0 based) to use as reference") do |item|
     options[:col_index] = item.to_i
+  end
+
+  options[:sep] = ','
+  opts.on("-s", "--separator STRING", "Character separator when collapse data") do |item|
+    options[:sep] = item
   end
 
   options[:col_aggregate] = nil
@@ -47,5 +52,5 @@ input.each do |line|
 end
 
 agg_data.each do |key, values|
-	STDOUT.puts "#{key}\t#{values.join(',')}"
+	STDOUT.puts "#{key}\t#{values.join(options[:sep])}"
 end

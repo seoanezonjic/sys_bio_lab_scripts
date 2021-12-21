@@ -25,7 +25,7 @@ def get_stats(graph, communities):
 	# Triangle: fraction of community nodes that belong to a triad.
 	# Maximum fraction of edges of a node of a community that point outside the community itself.
 	# Average fraction of edges of a node of a community that point outside the community itself.
-	metrics = [ 'size', 'avg_transitivity', 'conductance', 'triangle_participation_ratio', 'max_odf', 'avg_odf', 'avg_embeddedness', 'average_internal_degree', 'cut_ratio', 'fraction_over_median_degree', 'scaled_density' ]
+	metrics = [ 'size', 'avg_transitivity', 'internal_edge_density', 'conductance', 'triangle_participation_ratio', 'max_odf', 'avg_odf', 'avg_embeddedness', 'average_internal_degree', 'cut_ratio', 'fraction_over_median_degree', 'scaled_density' ]
 	results = []
 	for metric in metrics:
 		# https://www.kite.com/python/answers/how-to-call-a-function-by-its-name-as-a-string-in-python
@@ -37,7 +37,7 @@ def get_stats(graph, communities):
 def get_stats_by_cluster(graph, communities):
 	# HAS NOT SUMMARY: 'surprise', 'significance'
 	#metrics = [ 'size', 'avg_transitivity', 'conductance',  'triangle_participation_ratio', 'max_odf', 'avg_odf', 'avg_embeddedness' ]
-	metrics = [ 'size', 'avg_transitivity', 'conductance', 'triangle_participation_ratio', 'max_odf', 'avg_odf', 'avg_embeddedness', 'average_internal_degree', 'cut_ratio', 'fraction_over_median_degree', 'scaled_density']
+	metrics = [ 'size', 'avg_transitivity', 'internal_edge_density', 'conductance', 'triangle_participation_ratio', 'max_odf', 'avg_odf', 'avg_embeddedness', 'average_internal_degree', 'cut_ratio', 'fraction_over_median_degree', 'scaled_density', 'avg_distance' ]
 	cluster_results = []
 	for metric in metrics:
 		class_method = getattr(evaluation, metric)
@@ -168,18 +168,12 @@ if __name__=="__main__":
 	print(communities.overlap)
 	print(communities.node_coverage)
 
-	if(options.method == 'wcommunity'): #This method gives node names as numeric id, so we change to original node id
-		g = convert_graph_formats(g, ig.Graph)
-	
 	if(options.method != 'external'):	
 		f = open(options.output, "w")
 		count=0
 		for community in communities.communities:
 			for node in community:
-				if(options.method == 'wcommunity'): #This method gives node names as numeric id, so we change to original node id
-					f.write(str(count) + "\t" + g.vs[node]['name'] +"\n")
-				else:
-					f.write(str(count) + "\t" + node +"\n")
+				f.write(str(count) + "\t" + node +"\n")
 			count += 1
 		f.close()
 

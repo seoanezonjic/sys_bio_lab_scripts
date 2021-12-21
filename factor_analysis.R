@@ -9,7 +9,6 @@ library(cluster)
 library(fmsb)
 suppressMessages(library(PerformanceAnalytics))
 library(FactoInvestigate)
-
 ################################################################
 # OPTPARSE
 ################################################################
@@ -115,7 +114,16 @@ if(!opt$no_investigate){
 	Investigate(res.pca, file = paste(opt$output, "_Investigate.Rmd", sep=''))
 }
 if(opt$keep_dimensions == 0){
-	keep_dimensions <- dimRestrict(res.pca)
+	#detectCores_custom <- function(){return(8)}
+	#assignInNamespace("detectCores", detectCores_custom, ns="parallel")
+	#environment(detectCores_custom)<-asNamespace('parallel');
+	#unlockBinding("detectCores", as.environment("package:parallel"))
+	#assign("detectCores", detectCores_custom, as.environment("package:parallel"))
+	#lockBinding("detectCores", as.environment("package:parallel"))
+	#print(parallel::detectCores())
+	ref = eigenRef(res.pca, time = "10s", parallel=FALSE) # to avoid use parallel computation that greedy takes all cpu cores
+        rand = c(ref$inertia[1], diff(ref$inertia)) * 100
+	keep_dimensions <- dimRestrict(res.pca, rand = rand)
 	if(keep_dimensions < 2){
 		keep_dimensions <- 2
 		message('Significant axis are less than 2. The first two axis will be selected to continue the analysis')

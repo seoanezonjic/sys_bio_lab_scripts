@@ -28,7 +28,6 @@ File.open(ARGV[0]).each do |line|
 	end
 end
 
-
 metric_table = File.new(output, "w")
 if fixColNumber > 0
 	header="#{name_tag}\t#{fixCols.join("\t")}\t#{varTags.join("\t")}"
