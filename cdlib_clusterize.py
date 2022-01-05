@@ -5,7 +5,9 @@ import traceback
 import argparse
 #import optparse
 from networkx import *
+from collections import defaultdict
 from cdlib import algorithms, viz, evaluation
+from cdlib import NodeClustering
 from cdlib.utils import suppress_stdout, convert_graph_formats, nx_node_integer_mapping
 try:
     import igraph as ig
@@ -14,6 +16,17 @@ except ModuleNotFoundError:
 ####################################################################################
 ## METHODS
 ###################################################################################
+def get_external_coms(file, g, overlaping):
+		coms_to_node = defaultdict(list)
+		f = open(file, 'r')
+		for line in f:
+			fields = line.strip("\n").split("\t")
+			coms_to_node[fields[0]].append(fields[1])
+		coms = [list(c) for c in coms_to_node.values()]
+		communities = NodeClustering(coms, g, "external", method_parameters={}, overlap=overlaping)
+		return communities
+
+
 
 def get_stats(graph, communities):
 	#Fitness functions: summarize the characteristics of a computed set of communities.
@@ -56,6 +69,10 @@ if __name__=="__main__":
 		help="File with pairs to cluster")
 	parser.add_argument("-e", "--external", dest="external",
 		help="File with external clustering")
+	parser.add_argument("-A", "--clustering_A", dest="clustering_A", default=None,
+		help="Clustering A file")
+	parser.add_argument("-B", "--clustering_B", dest="clustering_B", default=None,
+		help="Clustering B file")
 	parser.add_argument("-o", "--output", dest="output", default="clusters.txt",
 		help="Output file")
 	parser.add_argument("-m", "--method", dest="method",
@@ -74,7 +91,7 @@ if __name__=="__main__":
 		help="Activate metrics by cluster")
 	options = parser.parse_args()
 
-	print(options)
+	print(options, file=sys.stderr)
 	exec('clust_kwargs = {' + options.additional_options +'}') # This allows inject custom arguments for each clustering method
     	
 	f = open(options.input, 'r')
@@ -85,97 +102,97 @@ if __name__=="__main__":
 			g.add_node(fields[0], bipartite=0)
 			g.add_node(fields[1], bipartite=1)
 		g.add_edge(fields[0], fields[1], weight= float(fields[2]))
-	
-	print(g.number_of_nodes())
-	print(g.number_of_edges())
-	if(options.method == 'leiden'):
-		communities = algorithms.leiden(g, weights='weight', **clust_kwargs)
-	elif(options.method == 'louvain'):
-		communities = algorithms.louvain(g, weight='weight', **clust_kwargs)
-	elif(options.method == 'cpm'):
-		communities = algorithms.cpm(g, weights='weight', **clust_kwargs)
-	elif(options.method == 'der'):
-		communities = algorithms.der(g, **clust_kwargs)
-	elif(options.method == 'edmot'):
-		communities = algorithms.edmot(g, **clust_kwargs)
-	elif(options.method == 'eigenvector'):
-		communities = algorithms.eigenvector(g, **clust_kwargs)
-	elif(options.method == 'gdmp2'):
-		communities = algorithms.gdmp2(g, **clust_kwargs)
-	elif(options.method == 'greedy_modularity'):
-		communities = algorithms.greedy_modularity(g, weight='weight', **clust_kwargs)
-	#elif(options.method == 'infomap'):
-	#	communities = algorithms.infomap(g)
-	elif(options.method == 'label_propagation'):
-		communities = algorithms.label_propagation(g, **clust_kwargs)
-	elif(options.method == 'markov_clustering'):
-		communities = algorithms.markov_clustering(g, **clust_kwargs)
-	elif(options.method == 'rber_pots'):
-		communities = algorithms.rber_pots(g, weights='weight', **clust_kwargs)
-	elif(options.method == 'rb_pots'):
-		communities = algorithms.rb_pots(g, weights='weight', **clust_kwargs)
-	elif(options.method == 'significance_communities'):
-		communities = algorithms.significance_communities(g, **clust_kwargs)
-	elif(options.method == 'spinglass'):
-		communities = algorithms.spinglass(g, **clust_kwargs)
-	elif(options.method == 'surprise_communities'):
-		communities = algorithms.surprise_communities(g, **clust_kwargs)
-	elif(options.method == 'walktrap'):
-		communities = algorithms.walktrap(g, **clust_kwargs)
-	#elif(options.method == 'sbm_dl'):
-	#	communities = algorithms.sbm_dl(g)
-	#elif(options.method == 'sbm_dl_nested'):
-	#	communities = algorithms.sbm_dl_nested(g)
-	elif(options.method == 'lais2'):
-		communities = algorithms.lais2(g, **clust_kwargs)
-	elif(options.method == 'big_clam'):
-		communities = algorithms.big_clam(g, **clust_kwargs)
-	elif(options.method == 'danmf'):
-		communities = algorithms.danmf(g, **clust_kwargs)
-	elif(options.method == 'ego_networks'):
-		communities = algorithms.ego_networks(g, **clust_kwargs)
-	elif(options.method == 'egonet_splitter'):
-		communities = algorithms.egonet_splitter(g, **clust_kwargs)
-	elif(options.method == 'nmnf'):
-		communities = algorithms.nmnf(g, **clust_kwargs)
-	elif(options.method == 'nnsed'):
-		communities = algorithms.nnsed(g, **clust_kwargs)
-	elif(options.method == 'slpa'):
-		communities = algorithms.slpa(g, **clust_kwargs)
-	elif(options.method == 'bimlpa'):
-		communities = actlgorithms.bimlpa(g, **clust_kwargs)
-	elif(options.method == 'wcommunity'):
-		communities = algorithms.wCommunity(g, **clust_kwargs)
-	elif(options.method == 'aslpaw'):
-		import warnings
-		with warnings.catch_warnings():
-			warnings.filterwarnings("ignore")
-			communities = algorithms.aslpaw(g)
-	elif(options.method == 'external'):
-		from collections import defaultdict
-		from cdlib import NodeClustering
-		coms_to_node = defaultdict(list)
-		f = open(options.external, 'r')
-		for line in f:
-			fields = line.strip("\n").split("\t")
-			coms_to_node[fields[0]].append(fields[1])
-		coms = [list(c) for c in coms_to_node.values()]
-		communities = NodeClustering(coms, g, "external", method_parameters={}, overlap=True)
-	else:
-		print('Not defined method')
-		sys.exit(0)
-	print(communities.method_parameters)
-	print(communities.overlap)
-	print(communities.node_coverage)
+	print(g.number_of_nodes(), file=sys.stderr)
+	print(g.number_of_edges(), file=sys.stderr)
 
-	if(options.method != 'external'):	
-		f = open(options.output, "w")
-		count=0
-		for community in communities.communities:
-			for node in community:
-				f.write(str(count) + "\t" + node +"\n")
-			count += 1
-		f.close()
+	if(options.clustering_A == None or options.clustering_B == None):
+		if(options.method == 'leiden'):
+			communities = algorithms.leiden(g, weights='weight', **clust_kwargs)
+		elif(options.method == 'louvain'):
+			communities = algorithms.louvain(g, weight='weight', **clust_kwargs)
+		elif(options.method == 'cpm'):
+			communities = algorithms.cpm(g, weights='weight', **clust_kwargs)
+		elif(options.method == 'der'):
+			communities = algorithms.der(g, **clust_kwargs)
+		elif(options.method == 'edmot'):
+			communities = algorithms.edmot(g, **clust_kwargs)
+		elif(options.method == 'eigenvector'):
+			communities = algorithms.eigenvector(g, **clust_kwargs)
+		elif(options.method == 'gdmp2'):
+			communities = algorithms.gdmp2(g, **clust_kwargs)
+		elif(options.method == 'greedy_modularity'):
+			communities = algorithms.greedy_modularity(g, weight='weight', **clust_kwargs)
+		#elif(options.method == 'infomap'):
+		#	communities = algorithms.infomap(g)
+		elif(options.method == 'label_propagation'):
+			communities = algorithms.label_propagation(g, **clust_kwargs)
+		elif(options.method == 'markov_clustering'):
+			communities = algorithms.markov_clustering(g, **clust_kwargs)
+		elif(options.method == 'rber_pots'):
+			communities = algorithms.rber_pots(g, weights='weight', **clust_kwargs)
+		elif(options.method == 'rb_pots'):
+			communities = algorithms.rb_pots(g, weights='weight', **clust_kwargs)
+		elif(options.method == 'significance_communities'):
+			communities = algorithms.significance_communities(g, **clust_kwargs)
+		elif(options.method == 'spinglass'):
+			communities = algorithms.spinglass(g, **clust_kwargs)
+		elif(options.method == 'surprise_communities'):
+			communities = algorithms.surprise_communities(g, **clust_kwargs)
+		elif(options.method == 'walktrap'):
+			communities = algorithms.walktrap(g, **clust_kwargs)
+		#elif(options.method == 'sbm_dl'):
+		#	communities = algorithms.sbm_dl(g)
+		#elif(options.method == 'sbm_dl_nested'):
+		#	communities = algorithms.sbm_dl_nested(g)
+		elif(options.method == 'lais2'):
+			communities = algorithms.lais2(g, **clust_kwargs)
+		elif(options.method == 'big_clam'):
+			communities = algorithms.big_clam(g, **clust_kwargs)
+		elif(options.method == 'danmf'):
+			communities = algorithms.danmf(g, **clust_kwargs)
+		elif(options.method == 'ego_networks'):
+			communities = algorithms.ego_networks(g, **clust_kwargs)
+		elif(options.method == 'egonet_splitter'):
+			communities = algorithms.egonet_splitter(g, **clust_kwargs)
+		elif(options.method == 'nmnf'):
+			communities = algorithms.nmnf(g, **clust_kwargs)
+		elif(options.method == 'nnsed'):
+			communities = algorithms.nnsed(g, **clust_kwargs)
+		elif(options.method == 'slpa'):
+			communities = algorithms.slpa(g, **clust_kwargs)
+		elif(options.method == 'bimlpa'):
+			communities = actlgorithms.bimlpa(g, **clust_kwargs)
+		elif(options.method == 'wcommunity'):
+			communities = algorithms.wCommunity(g, **clust_kwargs)
+		elif(options.method == 'aslpaw'):
+			import warnings
+			with warnings.catch_warnings():
+				warnings.filterwarnings("ignore")
+				communities = algorithms.aslpaw(g)
+		elif(options.method == 'external'):
+			communities = get_external_coms(options.external, g, True)
+		else:
+			print('Not defined method')
+			sys.exit(0)
+		print(communities.method_parameters, file=sys.stderr)
+		print(communities.overlap, file=sys.stderr)
+		print(communities.node_coverage, file=sys.stderr)
+	
+		if(options.method != 'external'):	# Write clustering generated by cdlib
+			f = open(options.output, "w")
+			count=0
+			for community in communities.communities:
+				for node in community:
+					f.write(str(count) + "\t" + node +"\n")
+				count += 1
+			f.close()
+	else:
+		communities_A = get_external_coms(options.clustering_A, g, False)
+		communities_B = get_external_coms(options.clustering_B, g, False)
+		res = evaluation.adjusted_mutual_information(communities_A,communities_B)
+		print(str(res.score))
+
+
 
 	if(options.stats):
 		metrics, results = get_stats(g, communities)
