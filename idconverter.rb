@@ -27,35 +27,40 @@ def load_dictionary(path)
 	return dict
 end
 
-def translate_data(input_data, dictionary, col_number, row_number, keep_header)
+def translate_data(input_data, dictionary, col_numbers, row_numbers, keep_header)
 	new_data = []
-	if !col_number.nil?
-		new_data = translate_cols(input_data, dictionary, col_number, keep_header)
-	elsif !row_number.nil?
-		new_data = translate_rows(input_data, dictionary, row_number, keep_header)
+	if !col_numbers.nil?
+		new_data = translate_cols(input_data, dictionary, col_numbers, keep_header)
+	elsif !row_numbers.nil?
+		new_data = translate_rows(input_data, dictionary, row_numbers, keep_header)
 	end
 	return new_data
 end
 
-def translate_cols(input_data, dictionary, col_number, keep_header)
+def translate_cols(input_data, dictionary, col_numbers, keep_header)
 	new_data = []
 	input_data.each_with_index do |record, i|
-		old_id = record[col_number]
-		new_ids = dictionary[old_id]
-		if !new_ids.nil?
-			new_ids.each do |new_id|
-				record[col_number] = new_id
-				new_data << record
+		valid_row = true
+		col_numbers.each do |col_number|
+			old_id = record[col_number]
+			new_ids = dictionary[old_id]
+			if !new_ids.nil?
+				new_ids.each do |new_id|
+					record[col_number] = new_id
+				end
+			elsif i == 0 && keep_header
+				valid_row = true
+			else 
+				valid_row = false
 			end
-		elsif i == 0 && keep_header
-			new_data << record
 		end
+		new_data << record if valid_row
 	end
 	return new_data
 end
 
-def translate_rows(input_data, dictionary, row_number, keep_header)
-	new_data = translate_cols(input_data.transpose, dictionary, row_number, keep_header)
+def translate_rows(input_data, dictionary, row_numbers, keep_header)
+	new_data = translate_cols(input_data.transpose, dictionary, row_numbers, keep_header)
 	return new_data.transpose
 end
 
@@ -67,14 +72,14 @@ options = {}
 OptionParser.new do |opts|
   opts.banner = "Usage: #{__FILE__} [options]"
 
-  options[:col_number] = nil
-  opts.on("-c", "--col_number INT", "Translate given column ids. 0 based coordinates.") do |opt|
-    options[:col_number] = opt.to_i
+  options[:col_numbers] = nil
+  opts.on("-c", "--col_numbers INT", "Translate given column ids. 0 based coordinates.") do |opt|
+    options[:col_numbers] = opt.split(",").map!{|c| c.to_i}
   end
 
-  options[:row_number] = nil
-  opts.on("-r", "--row_number INT", "Translate given row ids. 0 based coordinates.") do |opt|
-    options[:row_number] = opt.to_i
+  options[:row_numbers] = nil
+  opts.on("-r", "--row_numbers INT", "Translate given row ids. 0 based coordinates.") do |opt|
+    options[:row_numbers] = opt.split(",").map!{|r| r.to_i}
   end
 
   options[:input_file] = nil
@@ -102,7 +107,7 @@ end.parse!
 
 input_data = load_file(options[:input_file])
 dictionary = load_dictionary(options[:dictionary_file])
-translated_data = translate_data(input_data, dictionary,  options[:col_number], options[:row_number], options[:keep_header])
+translated_data = translate_data(input_data, dictionary,  options[:col_numbers], options[:row_numbers], options[:keep_header])
 translated_data.each do |record|
 	puts record.join("\t")
 end

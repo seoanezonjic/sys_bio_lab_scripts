@@ -152,12 +152,6 @@ optparse = OptionParser.new do |opts|
             options[:header] = true
         end
 
-	options[:make_mean2count_metrics] = false
-        opts.on( '-m', '--make_mean2count_metrics', 'Make mean across files of the metrics that are absolute counts ("total_sequences")' ) do 
-            options[:make_mean2count_metrics] = true
-        end
-
-
         options[:transpose] = false
         opts.on( '-T', '--transpose', 'Show stat matrix transposed' ) do 
             options[:transpose] = true
@@ -216,11 +210,7 @@ n_parameters.times do |parameter_index|
         n_samples.times do |sample_index|
             sum += all_stats[sample_index][parameter_index]
         end
-	if !options[:make_mean2count_metrics] && header[parameter_index] == 'total_sequences'
-		means << sum
-	else
-		means << sum.fdiv(n_samples)
-	end
+        means << sum.to_f/n_samples
     end
 end
 if !options[:transpose]

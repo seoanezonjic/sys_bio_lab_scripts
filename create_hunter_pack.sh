@@ -2,8 +2,18 @@
 
 path=$1
 output_folder=$2
+additional_path=$3
+echo $path
+echo $output_folder
+echo $additional_path
 mkdir -p $output_folder
 cp $path/mapping_reports/mapping_report.html $output_folder
+if [ ! -z "$additional_path" ]; then
+	echo 'A'
+	cp $additional_path/mapping_reports/mapping_report.html $output_folder/mapping_report_detection.html # use this to add files from other execution (miRNA DEA plus miRNA detection)
+	cp $additional_path/mapping_reports/all_miRNA_report.html $output_folder/all_miRNA_report.html
+	cp $additional_path/mapping_reports/miRNA_nr.fasta $output_folder/miRNA_detected.fasta
+fi
 
 for comparison_path in $path/DEGenesHunter_results/*
 do

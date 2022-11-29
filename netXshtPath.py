@@ -30,6 +30,8 @@ if __name__=="__main__":
 		help="Metrics by cluster output file")
 	parser.add_argument('-g', '--cluster_stats', action='store_true', default=False,
 		help="Activate metrics by cluster")
+	parser.add_argument('-p', '--partial_clusters', action='store_true', default=False,
+		help="Allow expand clusters with unconnected members")
 	options = parser.parse_args()
 
 	print(options)
@@ -63,7 +65,7 @@ if __name__=="__main__":
 		while len(com) > 1 and connected:
 			source = com.pop(0)
 			for target in com:
-				sht_paths = nx.all_shortest_paths(g, source=source, target=target)
+				sht_paths = nx.all_shortest_paths(g, source=source, target=target, weight='weight', method='dijkstra')
 				nodes = []
 				try:
 					for stp in sht_paths:
@@ -76,8 +78,11 @@ if __name__=="__main__":
 				except NetworkXNoPath as err:
 					print("Net path error in cluster id " + com_id + ": {0}".format(err))
 					path_lens = None
-					connected = False
-					break
+					if options.partial_clusters:
+						continue
+					else:
+						connected = False
+						break
 		if options.cluster_stats:
 			if path_lens is not None:
 				average_path_len = sum(path_lens) / len(path_lens) -1 

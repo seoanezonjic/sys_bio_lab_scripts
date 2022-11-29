@@ -1,7 +1,8 @@
 # /usr/bin/env bash
 #module load sra_toolkit
 #module load ncbi_cpp_toolkit/12.0.0
-. ~soft_cvi_114/initializes/init_sratoolkit
+#. ~soft_cvi_114/initializes/init_sratoolkit
+. ~soft_bio_267/initializes/init_sratoolkit
 
 # CONFIG:::
 # echo '/repository/user/main/public/root = "/mnt/scratch/users/pab_001_uma/pedro/sra_download"' > ~/.ncbi/user-settings.mkfg
