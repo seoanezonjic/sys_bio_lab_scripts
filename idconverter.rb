@@ -28,39 +28,38 @@ def load_dictionary(path)
 end
 
 def translate_data(input_data, dictionary, col_numbers, row_numbers, keep_header)
-	new_data = []
+	new_data = input_data
 	if !col_numbers.nil?
-		new_data = translate_cols(input_data, dictionary, col_numbers, keep_header)
+		col_numbers.each do |col_number|
+			new_data = translate_cols(new_data, dictionary, col_number, keep_header)
+		end
 	elsif !row_numbers.nil?
-		new_data = translate_rows(input_data, dictionary, row_numbers, keep_header)
+		row_numbers.each do |row_number|
+			new_data = translate_rows(new_data, dictionary, row_number, keep_header)
+		end
 	end
 	return new_data
 end
 
-def translate_cols(input_data, dictionary, col_numbers, keep_header)
+def translate_cols(input_data, dictionary, col_number, keep_header)
 	new_data = []
 	input_data.each_with_index do |record, i|
-		valid_row = true
-		col_numbers.each do |col_number|
-			old_id = record[col_number]
-			new_ids = dictionary[old_id]
-			if !new_ids.nil?
-				new_ids.each do |new_id|
-					record[col_number] = new_id
-				end
-			elsif i == 0 && keep_header
-				valid_row = true
-			else 
-				valid_row = false
+		old_id = record[col_number]
+		new_ids = dictionary[old_id]
+		if !new_ids.nil?
+			new_ids.each do |new_id|
+				record[col_number] = new_id
+				new_data << record
 			end
+		elsif i == 0 && keep_header
+			new_data << record
 		end
-		new_data << record if valid_row
 	end
 	return new_data
 end
 
-def translate_rows(input_data, dictionary, row_numbers, keep_header)
-	new_data = translate_cols(input_data.transpose, dictionary, row_numbers, keep_header)
+def translate_rows(input_data, dictionary, row_number, keep_header)
+	new_data = translate_cols(input_data.transpose, dictionary, row_number, keep_header)
 	return new_data.transpose
 end
 
@@ -98,7 +97,6 @@ OptionParser.new do |opts|
   end
 
 end.parse!
-
 
 
 ##############################################
