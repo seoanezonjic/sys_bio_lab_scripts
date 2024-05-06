@@ -26,13 +26,19 @@ if(length(split_string[[1]]) == 2) {
 
 check_output <- function(file, loader, object) {
 	if (!file.exists(file)) {
-		stop(paste0("File ", file, " not found"))
+		message(paste0("File ", file, " not found"))
+		cat(FALSE)
+		quit(status=0)
 	}
 	loaded_file <- loader(file)
 	if(is.null(object) || exists(object)) {
-		return(message("Check was successful!"))
+		message("Check was successful!")
+		cat(TRUE)
+		quit(status=0)
 	}
-	stop('File was loaded, but did not contain expected object')
+	warning('File was loaded, but did not contain expected object')
+	cat(FALSE)
+	quit(status=0)
 }
 
 check_output(file = opt$file, loader = loader, object = opt$object)
