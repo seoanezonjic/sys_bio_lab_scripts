@@ -227,8 +227,9 @@ get_summary_from_rocr <- function(data, serie_name, measures=c("acc","tpr","tnr"
     f_measures <- performance(pred, measure = 'f')
     best_f <- max(unlist(f_measures@y.values), na.rm = TRUE) 
     filter_indxs <- which(unlist(f_measures@y.values) == best_f)
+    filter_indxs <- max(filter_indxs) # choosing the last cutoff for best f
 
-        # Obtain target measures
+    # Obtain target measures
     measures_with_best_f <- measures[! measures %in% "auc"]
     measure_values <- unlist(lapply(measures_with_best_f,function(m){
         measure <- performance(pred, measure = m)
