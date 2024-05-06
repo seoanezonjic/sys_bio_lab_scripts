@@ -17,20 +17,21 @@
 source ~soft_bio_267/initializes/init_spring
 
 input_folder=$1
+output_folder=$2
 FILES=$3 #path to file with filenames
+layout=$4
 
 mkdir -p $2
-layout=$4
 
 while IFS= read -r fname
 do
   echo "Processing $fname"
-  if [[ $4 == 'paired' ]]
+  if [[ $layout = 'paired' ]]
   then
-	  spring -d -i $input_folder/$fname'.spring' -o $2/$fname'_1.fastq.gz' $2/$fname'_2.fastq.gz' -g -t 16
-  elif [[ $4 == 'single' ]] 
+	  spring -d -i $input_folder/$fname'.spring' -o $output_folder/$fname'_1.fastq.gz' $output_folder/$fname'_2.fastq.gz' -g -t 16
+  elif [[ $layout == 'single' ]] 
   then
-	  spring -d -i $input_folder/$fname'.spring' -o $2/$fname'_1.fastq.gz' -g -t 16
+	  spring -d -i $input_folder/$fname'.spring' -o $output_folder/$fname'_1.fastq.gz' -g -t 16
   else
 	echo "Error: wrong layout specified. Please choose paired or single."
 	exit 1
