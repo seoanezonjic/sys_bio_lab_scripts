@@ -48,7 +48,7 @@ handle_options() {
 
         valid_presets="high\nlow"
         preset=$(extract_argument $@)
-        preset=${preset^^}
+        preset=${preset,,}
         matches=`echo -e $valid_presets | grep -w -c $preset`
 
         if [ $matches != 1 ]; then
