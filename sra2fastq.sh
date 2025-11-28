@@ -2,7 +2,8 @@
 #module load sra_toolkit
 #module load ncbi_cpp_toolkit/12.0.0
 #. ~soft_cvi_114/initializes/init_sratoolkit
-. ~soft_bio_267/initializes/init_sratoolkit
+#. ~soft_bio_267/initializes/init_sratoolkit
+. ~soft_bio_267/initializes/init_parallel_fastqdump
 
 # CONFIG:::
 # echo '/repository/user/main/public/root = "/mnt/scratch/users/pab_001_uma/pedro/sra_download"' > ~/.ncbi/user-settings.mkfg
@@ -12,6 +13,7 @@
 # $4 aditional options for fastq-dump
 for i in `cat $1`
 do
-    fastq-dump --split-files --gzip --origfmt $4 --outdir $3 $2"/"${i}".sra"
+    parallel-fastq-dump --sra-id $2"/"${i}".sra" --outdir $3 --split-files --gzip --origfmt $4
+    #fastq-dump --split-files --gzip --origfmt $4 --outdir $3 $2"/"${i}".sra"
 done
 
