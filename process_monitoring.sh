@@ -1,12 +1,25 @@
 #! /usr/bin/env bash
 
 
-process_id=$1
-if [ ! -z "ps | grep $process_id" ]; then
-	while [ -s timepoint_data ]; do 
-		ps -p $process_pid -o %cpu,%mem,etime | sed -n "2p" > timepoint_data
-		cat timepoint_data >> execution_metrics
-		sleep 1
+command_name=$1
+output_file=$2
+
+echo COMMAND_NAME IS $command_name
+echo OUTPUT_FILE IS $output_file
+
+if [ -z "${output_file}" ]; then
+	echo ERROR: NO OUTPUT FILE SPECIFIED
+	exit 1
+fi
+
+sleep 5
+
+process_pid=`pidof $command_name`
+if [ "$?" == 0 ]; then
+	rm $output_file
+	while [ ! -z "`ps | grep $process_pid`" ]; do 
+		ps -p $process_pid -o %cpu,%mem,etime | sed -n "2p" > $output/timepoint_data
+		awk 'BEGIN{OFS="\t"}{print $1,$2,$3}' $output/timepoint_data >> $output_file
+		sleep 5
 	done
-	awk 'BEGIN{ORFS="\t"}{print $1,$2,$3}' execution_metrics > tmp && mv tmp execution_metrics
 fi
