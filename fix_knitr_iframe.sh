@@ -25,7 +25,7 @@ while IFS= read -r line; do
 	fi
 	if [[ "$item_environment" == "knitr_style" ]]; then
 		if [[ "$line" == "</style>" ]]; then
-			item_environment="iframe"
+			item_environment="none" # This was set to "iframe" but then it would potentially remove more than one style inside the iframe. The line that matches the knitr style should only ever exact match the problematic style, but this ensures NO matches further than the first will ever occur. Ping me #alvaro if you ever have trouble with the script
 		fi
 	fi
 done < $html_file
