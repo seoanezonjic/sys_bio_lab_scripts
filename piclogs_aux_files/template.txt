@@ -1,0 +1,837 @@
+<%doc>
+    report_slurm.mako
+    -----------------
+    Variable esperada en el contexto: `df` (pandas.DataFrame) generada por parse_slurm_logs.py
+    Columnas necesarias: timestamp, NodeName, state_base, state_tokens, CPUTot, CPUAlloc,
+    CPUEfctv, RealMemory, AllocMem. Opcionales (si existen se usan): CPULoad, Partitions,
+    ReservationName, BootTime, SlurmdStartTime.
+
+    Los gráficos usan Plotly (CDN). Si el informe se abre sin internet, descarga plotly.min.js
+    y cambia la etiqueta <script src=...> por la ruta local.
+</%doc>
+<%
+df = plotter.hash_vars["df"]
+R = build(df)
+K = R["kpi"]
+%>
+<%!
+import html
+import json
+import math
+import re
+from collections import Counter
+from datetime import datetime
+
+import numpy as np
+import pandas as pd
+
+MAX_POINTS = 500  # por encima de este nº de instantáneas se agrupa en intervalos
+
+STATE_ORDER = ["IDLE", "MIXED", "ALLOCATED", "COMPLETING", "RESERVED", "PLANNED", "DRAINING",
+               "DRAINED", "DRAIN", "DOWN", "FAIL", "FAILING", "NOT_RESPONDING", "POWERED_DOWN",
+               "POWERING_DOWN", "POWERING_UP", "FUTURE", "UNKNOWN"]
+STATE_COLORS = {
+    "IDLE": "#22c55e", "MIXED": "#f59e0b", "ALLOCATED": "#3b82f6", "COMPLETING": "#06b6d4",
+    "RESERVED": "#14b8a6", "PLANNED": "#8b5cf6", "DRAINING": "#fb923c", "DRAINED": "#a855f7",
+    "DRAIN": "#a855f7", "DOWN": "#ef4444", "FAIL": "#dc2626", "FAILING": "#f87171",
+    "NOT_RESPONDING": "#be123c", "FUTURE": "#94a3b8", "UNKNOWN": "#64748b",
+}
+FALLBACK = ["#ec4899", "#84cc16", "#0ea5e9", "#eab308", "#d946ef", "#10b981", "#f43f5e", "#6366f1"]
+BAD_PREFIXES = ("DOWN", "DRAIN", "FAIL", "NOT_RESP", "INVAL")
+
+VENN_GEOM = {
+    1: {"c": [(0, 0)], "lab": {(1,): (0, 0)}, "name": [(0, 1.5)]},
+    2: {"c": [(-0.55, 0), (0.55, 0)],
+        "lab": {(1, 0): (-1.05, 0), (0, 1): (1.05, 0), (1, 1): (0, 0)},
+        "name": [(-0.95, 1.5), (0.95, 1.5)]},
+    3: {"c": [(-0.6, 0.35), (0.6, 0.35), (0, -0.7)],
+        "lab": {(1, 0, 0): (-1.05, 0.75), (0, 1, 0): (1.05, 0.75), (0, 0, 1): (0, -1.4),
+                (1, 1, 0): (0, 0.85), (1, 0, 1): (-0.62, -0.38), (0, 1, 1): (0.62, -0.38),
+                (1, 1, 1): (0, 0.05)},
+        "name": [(-1.45, 1.85), (1.45, 1.85), (0, -2.1)]},
+}
+VENN_R = 1.1
+
+
+# ----------------------------- utilidades ---------------------------------- #
+def esc(x):
+    return html.escape(str(x))
+
+
+def num(x, dec=0):
+    """Formato español: 1.234,5"""
+    if x is None or (isinstance(x, float) and math.isnan(x)):
+        return "–"
+    s = f"{x:,.{dec}f}"
+    return s.replace(",", "X").replace(".", ",").replace("X", ".")
+
+
+def L(values):
+    """Serie -> lista JSON-friendly (NaN -> None, Timestamp -> ISO)."""
+    out = []
+    for v in values:
+        if v is None or (not isinstance(v, (str, list, tuple)) and pd.isna(v)):
+            out.append(None)
+        elif isinstance(v, (pd.Timestamp, datetime)):
+            out.append(pd.Timestamp(v).isoformat())
+        elif isinstance(v, np.integer):
+            out.append(int(v))
+        elif isinstance(v, (np.floating, float)):
+            out.append(round(float(v), 2))
+        else:
+            out.append(v)
+    return out
+
+
+def _default(o):
+    if isinstance(o, np.integer):
+        return int(o)
+    if isinstance(o, np.floating):
+        return None if np.isnan(o) else float(o)
+    if isinstance(o, (pd.Timestamp, datetime)):
+        return pd.Timestamp(o).isoformat()
+    if isinstance(o, (set, tuple)):
+        return list(o)
+    return str(o)
+
+
+def J(obj):
+    return json.dumps(obj, default=_default, ensure_ascii=False).replace("</", "<\\/")
+
+
+def natural_key(s):
+    return [int(t) if t.isdigit() else t for t in re.split(r"(\d+)", str(s))]
+
+
+def state_sort(name):
+    base = name.split("+")[0]
+    b = STATE_ORDER.index(base) if base in STATE_ORDER else len(STATE_ORDER)
+    return (b, name.count("+"), name)
+
+
+COMBO_PALETTE = ["#22c55e", "#f59e0b", "#3b82f6", "#ef4444", "#a855f7", "#06b6d4", "#ec4899", "#84cc16",
+                 "#f97316", "#14b8a6", "#6366f1", "#eab308", "#d946ef", "#0ea5e9", "#f43f5e", "#10b981",
+                 "#8b5cf6", "#fb7185", "#65a30d", "#0891b2"]
+
+
+def make_combo_colors(names):
+    """Un color distinto por cada combinación de estados (los estados simples conservan su color)."""
+    ordered = sorted(names, key=state_sort)
+    colors = {n: STATE_COLORS[n] for n in ordered if n in STATE_COLORS}
+    used = set(colors.values())
+    extra = iter(COMBO_PALETTE * 5)
+    for n in ordered:
+        if n not in colors:
+            c = next(extra)
+            while c in used:
+                c = next(extra)
+            colors[n] = c
+            used.add(c)
+    return colors
+
+
+def make_colors(names):
+    colors, extra = {}, iter(FALLBACK * 10)
+    for n in sorted(names, key=state_sort):
+        colors[n] = STATE_COLORS.get(n) or next(extra)
+    return colors
+
+
+def hex_rgba(hexcolor, alpha):
+    h = hexcolor.lstrip("#")
+    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    return "rgba(%d,%d,%d,%s)" % (r, g, b, alpha)
+
+
+def pick_freq(t0, t1, n_snap):
+    if n_snap <= MAX_POINTS:
+        return None
+    target = (t1 - t0).total_seconds() / MAX_POINTS
+    for secs, freq in [(1, "1s"), (5, "5s"), (10, "10s"), (30, "30s"), (60, "1min"), (300, "5min"),
+                       (900, "15min"), (1800, "30min"), (3600, "1h"), (7200, "2h"),
+                       (21600, "6h"), (43200, "12h"), (86400, "1D")]:
+        if target <= secs:
+            return freq
+    return "7D"
+
+
+def rs(frame, freq):
+    if freq is None:
+        return frame
+    return frame.resample(freq).mean().dropna(how="all")
+
+
+def pack(frame, colors, decimals=1, keep_order=False):
+    cols = list(frame.columns) if keep_order else sorted(frame.columns, key=state_sort)
+    return {
+        "x": [pd.Timestamp(t).isoformat() for t in frame.index],
+        "series": [{"name": str(c), "y": L(frame[c].round(decimals)), "color": colors.get(c, "#64748b")}
+                   for c in cols],
+    }
+
+
+def human_span(td):
+    s = int(td.total_seconds())
+    if s < 60:
+        return "%d s" % s
+    if s < 3600:
+        return "%d min" % (s // 60)
+    if s < 86400:
+        return "%d h %d min" % (s // 3600, (s % 3600) // 60)
+    return "%d d %d h" % (s // 86400, (s % 86400) // 3600)
+
+
+def fmt_ts(t):
+    return pd.Timestamp(t).strftime("%d/%m/%Y %H:%M:%S")
+
+
+def change_events(d2, col, label, limit=20):
+    if col not in d2:
+        return []
+    prev = d2.groupby("NodeName")[col].shift()
+    mask = prev.notna() & d2[col].notna() & (prev != d2[col])
+    ev = d2[mask].assign(_prev=prev[mask]).sort_values("timestamp", ascending=False).head(limit)
+    return [{"when": fmt_ts(r["timestamp"]), "node": r["NodeName"], "kind": label,
+             "detail": "%s → %s" % (fmt_ts(r["_prev"]), fmt_ts(r[col]))} for _, r in ev.iterrows()]
+
+
+# ----------------------------- análisis ------------------------------------ #
+def build(df):
+    d = df.copy()
+    d["timestamp"] = pd.to_datetime(d["timestamp"])
+    d = d.sort_values(["timestamp", "NodeName"]).reset_index(drop=True)
+    for c in ["CPUAlloc", "CPUEfctv", "CPUTot", "CPULoad", "RealMemory", "AllocMem"]:
+        if c not in d:
+            d[c] = np.nan
+        d[c] = pd.to_numeric(d[c], errors="coerce")
+    d["state_base"] = d["state_base"].fillna("UNKNOWN").astype(str)
+    d["state_tokens"] = d["state_tokens"].fillna("UNKNOWN").astype(str)
+    d["cpu_alloc_pct"] = 100 * d["CPUAlloc"] / d["CPUEfctv"].where(d["CPUEfctv"] > 0)
+    d["mem_alloc_pct"] = 100 * d["AllocMem"] / d["RealMemory"].where(d["RealMemory"] > 0)
+
+    t0, t1 = d["timestamp"].min(), d["timestamp"].max()
+    n_snap = d["timestamp"].nunique()
+    freq = pick_freq(t0, t1, n_snap)
+    last = d[d["timestamp"] == t1].copy()
+
+    all_tokens = set(t for s in d["state_tokens"] for t in s.split("+") if t)
+    colors = make_colors(set(d["state_base"]) | all_tokens)
+    ccolors = make_combo_colors(set(d["state_tokens"]))  # un color por combinación de estados
+    ccolors["Otros"] = "#9ca3af"
+    # Los TOP_N estados más prevalentes de todo el periodo (nº de filas nodo×instantánea); el resto -> "Otros"
+    TOP_N = 8
+    top_states = list(d["state_tokens"].value_counts().index[:TOP_N])
+    d["state_group"] = d["state_tokens"].where(d["state_tokens"].isin(top_states), "Otros")
+    R = {"colors": colors, "freq": freq or "", "n_snap": int(n_snap)}
+
+    # 1) Nodos y cores por estado COMPLETO (p. ej. MIXED+PLANNED) a lo largo del tiempo
+    cnt = d.groupby(["timestamp", "state_group"]).size().unstack(fill_value=0).sort_index()
+    cor = d.groupby(["timestamp", "state_group"])["CPUTot"].sum().unstack(fill_value=0).sort_index()
+    R["nodes_state"] = pack(rs(cnt, freq), ccolors)
+    R["cores_state"] = pack(rs(cor, freq), ccolors, 0)
+
+    # 2) Utilización global: asignado vs. carga real
+    agg = {"cpu_alloc": ("CPUAlloc", "sum"), "cpu_eff": ("CPUEfctv", "sum"),
+           "mem_alloc": ("AllocMem", "sum"), "mem_tot": ("RealMemory", "sum")}
+    has_load = d["CPULoad"].notna().any()
+    if has_load:
+        agg["cpu_load"] = ("CPULoad", "sum")
+    g = d.groupby("timestamp").agg(**agg)
+    u = pd.DataFrame(index=g.index)
+    u["CPU asignada (%)"] = 100 * g["cpu_alloc"] / g["cpu_eff"].where(g["cpu_eff"] > 0)
+    if has_load:
+        u["CPU carga real (%)"] = 100 * g["cpu_load"] / g["cpu_eff"].where(g["cpu_eff"] > 0)
+    u["Memoria asignada (%)"] = 100 * g["mem_alloc"] / g["mem_tot"].where(g["mem_tot"] > 0)
+    ucolors = {"CPU asignada (%)": "#6366f1", "CPU carga real (%)": "#f43f5e", "Memoria asignada (%)": "#0ea5e9"}
+    R["util"] = pack(rs(u, freq), ucolors, 1, keep_order=True)
+
+    # 3) Heatmap CPU asignada por nodo
+    hm = d.pivot_table(index="NodeName", columns="timestamp", values="cpu_alloc_pct", aggfunc="mean")
+    if freq:
+        hm = hm.T.resample(freq).mean().dropna(how="all").T
+    hm = hm.loc[sorted(hm.index, key=natural_key)]
+    R["heat"] = {"x": [pd.Timestamp(t).isoformat() for t in hm.columns], "y": list(hm.index),
+                 "z": [L(row) for row in hm.values],
+                 "height": int(max(320, min(1100, 150 + 17 * len(hm.index))))}
+
+    # 4) Venn con los estados de la última instantánea
+    node_sets = {r["NodeName"]: frozenset(t for t in r["state_tokens"].split("+") if t)
+                 for _, r in last.iterrows()}
+    freq_tok = Counter(t for s in node_sets.values() for t in s)
+    top = [t for t, _ in freq_tok.most_common(3)]
+    k = len(top)
+    geom = VENN_GEOM[k]
+    regions, region_nodes, outside = Counter(), {}, []
+    for node, s in node_sets.items():
+        key = tuple(1 if t in s else 0 for t in top)
+        if any(key):
+            regions[key] += 1
+            region_nodes.setdefault(key, []).append(node)
+        else:
+            outside.append(node)
+    shapes, labels, names = [], [], []
+    for i, (cx, cy) in enumerate(geom["c"]):
+        col = colors.get(top[i], FALLBACK[i])
+        shapes.append({"type": "circle", "xref": "x", "yref": "y", "layer": "below",
+                       "x0": cx - VENN_R, "x1": cx + VENN_R, "y0": cy - VENN_R, "y1": cy + VENN_R,
+                       "fillcolor": hex_rgba(col, 0.35), "line": {"color": col, "width": 2}})
+        nx, ny = geom["name"][i]
+        names.append({"x": nx, "y": ny, "text": "<b>%s</b><br>%d nodos" % (top[i], freq_tok[top[i]]), "color": col})
+    for key, (lx, ly) in geom["lab"].items():
+        n = regions.get(key, 0)
+        if n == 0:
+            continue
+        inside = " ∩ ".join(top[i] for i, v in enumerate(key) if v)
+        only = "" if sum(key) > 1 else "solo "
+        nodes = sorted(region_nodes[key], key=natural_key)
+        hover = "%s%s: %d nodos<br>%s%s" % (only, inside, n, ", ".join(nodes[:15]), "…" if len(nodes) > 15 else "")
+        labels.append({"x": lx, "y": ly, "n": n, "hover": hover})
+    R["venn"] = {"shapes": shapes, "labels": labels, "names": names, "k": k,
+                 "outside": len(outside), "n_tokens": len(freq_tok), "shown": top}
+
+    combo = last.groupby("state_tokens")["NodeName"].apply(list)
+    combos = [{"state": s, "n": len(v),
+               "nodes": ", ".join(sorted(v, key=natural_key)[:12]) + ("…" if len(v) > 12 else "")}
+              for s, v in combo.items()]
+    combos.sort(key=lambda c: -c["n"])
+    for c in combos:
+        c["color"] = ccolors.get(c["state"], "#64748b")
+    R["combos"] = combos
+
+    # 5) Asignado vs. carga real (última instantánea)
+    sc = []
+    if has_load:
+        for st, grp in sorted(last.groupby("state_tokens"), key=lambda kv: state_sort(kv[0])):
+            sc.append({"state": st, "color": ccolors.get(st, "#64748b"), "x": L(grp["CPUAlloc"]),
+                       "y": L(grp["CPULoad"]), "size": L(grp["CPUTot"]), "text": list(grp["NodeName"])})
+    R["scatter"] = {"groups": sc,
+                    "max": float(np.nanmax([last["CPUAlloc"].max(), last["CPULoad"].max()])) if has_load else 0}
+
+    # 6) Particiones y reservas (última instantánea)
+    R["partitions"] = []
+    if "Partitions" in last and last["Partitions"].notna().any():
+        p = last[["NodeName", "Partitions", "CPUAlloc", "CPUEfctv"]].copy()
+        p["part"] = p["Partitions"].fillna("").astype(str).str.split(",")
+        p = p.explode("part")
+        p["part"] = p["part"].str.strip()
+        p = p[p["part"] != ""]
+        pa = p.groupby("part").agg(nodes=("NodeName", "nunique"), alloc=("CPUAlloc", "sum"), eff=("CPUEfctv", "sum"))
+        R["partitions"] = [{"name": i, "nodes": int(r.nodes), "alloc": float(r.alloc),
+                            "idle": float(max(r.eff - r.alloc, 0))} for i, r in pa.iterrows()]
+    R["reservations"] = []
+    if "ReservationName" in last and last["ReservationName"].notna().any():
+        rv = last[last["ReservationName"].notna()].groupby("ReservationName").agg(
+            nodes=("NodeName", "nunique"), cores=("CPUTot", "sum"))
+        R["reservations"] = [{"name": i, "nodes": int(r.nodes), "cores": float(r.cores)} for i, r in rv.iterrows()]
+
+    # 7) Estabilidad: transiciones de estado, reinicios
+    d2 = d.sort_values(["NodeName", "timestamp"])
+    prev = d2.groupby("NodeName")["state_tokens"].shift()
+    mask = prev.notna() & (prev != d2["state_tokens"])
+    tr = d2[mask].assign(_prev=prev[mask])
+    top_tr = tr.groupby("NodeName").size().sort_values(ascending=False).head(10)
+    R["unstable"] = {"nodes": list(top_tr.index[::-1]), "n": [int(v) for v in top_tr.values[::-1]]}
+    R["n_transitions"] = int(len(tr))
+    recent = tr.sort_values("timestamp", ascending=False).head(15)
+    R["transitions"] = [{"when": fmt_ts(r["timestamp"]), "node": r["NodeName"], "from": r["_prev"],
+                         "to": r["state_tokens"]} for _, r in recent.iterrows()]
+    events = change_events(d2, "BootTime", "Reinicio del nodo") + change_events(d2, "SlurmdStartTime", "Reinicio de slurmd")
+    R["events"] = sorted(events, key=lambda e: e["when"], reverse=True)[:20]
+
+    # 8) Tabla resumen de la última instantánea
+    rows = []
+    for r in sorted(last.to_dict("records"), key=lambda r: natural_key(r["NodeName"])):
+        up = None
+        if "BootTime" in r and pd.notna(r["BootTime"]):
+            up = (t1 - pd.Timestamp(r["BootTime"])).total_seconds() / 86400
+        res = r.get("ReservationName")
+        rows.append({
+            "node": r["NodeName"], "state": r["state_tokens"], "color": ccolors.get(r["state_tokens"], "#64748b"),
+            "part": r.get("Partitions") if isinstance(r.get("Partitions"), str) else "",
+            "alloc": r["CPUAlloc"], "eff": r["CPUEfctv"], "cpu_pct": r["cpu_alloc_pct"], "load": r["CPULoad"],
+            "mem_pct": r["mem_alloc_pct"], "mem_gb": r["RealMemory"] / 1024 if pd.notna(r["RealMemory"]) else None,
+            "uptime": up, "res": res if isinstance(res, str) else "",
+        })
+    R["table"] = rows
+
+    # 9) KPIs e insights
+    cpu_eff, cpu_alloc = last["CPUEfctv"].sum(), last["CPUAlloc"].sum()
+    mem_tot, mem_alloc = last["RealMemory"].sum(), last["AllocMem"].sum()
+    bad = [n for n, s in node_sets.items() if any(t.startswith(BAD_PREFIXES) for t in s)]
+    usable = [n for n, s in node_sets.items() if (("IDLE" in s) or ("MIXED" in s)) and n not in bad]
+    R["kpi"] = {
+        "nodes": int(last["NodeName"].nunique()), "snapshots": int(n_snap),
+        "first": fmt_ts(t0), "last": fmt_ts(t1), "span": human_span(t1 - t0),
+        "cpu_total": float(last["CPUTot"].sum()), "cpu_pct": 100 * cpu_alloc / cpu_eff if cpu_eff else None,
+        "mem_gb": mem_tot / 1024 if mem_tot else None, "mem_pct": 100 * mem_alloc / mem_tot if mem_tot else None,
+        "usable": len(usable), "bad": len(bad), "bad_nodes": sorted(bad, key=natural_key),
+        "transitions": int(len(tr)), "reboots": int(sum(1 for e in events if e["kind"] == "Reinicio del nodo")),
+    }
+
+    ins = []
+    cpu_series = u["CPU asignada (%)"].dropna()
+    if len(cpu_series) > 1:
+        ins.append("Pico de CPU asignada: <b>%s %%</b> el %s (mínimo %s %%)." % (
+            num(cpu_series.max(), 1), fmt_ts(cpu_series.idxmax()), num(cpu_series.min(), 1)))
+    if has_load:
+        w = last[(last["CPUAlloc"] > 0) & (last["CPULoad"] < 0.5 * last["CPUAlloc"])]
+        if len(w):
+            gap = float((w["CPUAlloc"] - w["CPULoad"]).sum())
+            ins.append("<b>%d nodos</b> tienen reservados muchos más cores de los que usan (carga &lt; 50 %% de lo asignado): "
+                       "≈ <b>%s cores</b> reservados pero sin usar." % (len(w), num(gap)))
+    st = last[(last["mem_alloc_pct"] >= 85) & (last["cpu_alloc_pct"] < 50)]
+    if len(st):
+        ins.append("<b>%d nodos</b> con la memoria casi agotada (≥ 85 %%) pero más de la mitad de la CPU libre: "
+                   "≈ <b>%s cores</b> inaccesibles por falta de RAM (%s)." % (
+                       len(st), num(float(st["cpu_idle"].sum()) if "cpu_idle" in st else float((st["CPUEfctv"] - st["CPUAlloc"]).sum())),
+                       esc(", ".join(sorted(st["NodeName"], key=natural_key)[:6])) + ("…" if len(st) > 6 else "")))
+    if bad:
+        ins.append("Nodos no disponibles (DOWN / DRAIN / FAIL…): <b>%s</b>." % esc(", ".join(sorted(bad, key=natural_key)[:10])))
+    if R["n_transitions"]:
+        ins.append("Se han registrado <b>%d cambios de estado</b> en el periodo." % R["n_transitions"])
+    if not ins:
+        ins.append("Sin incidencias destacables en el periodo analizado.")
+    R["insights"] = ins
+    return R
+%>
+<%
+R = build(df)
+K = R["kpi"]
+%>
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Informe del clúster Slurm</title>
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
+<style>
+  :root {
+    --bg: #f1f5f9; --card: #ffffff; --ink: #0f172a; --muted: #64748b; --line: #e2e8f0;
+    --accent: #6366f1; --accent2: #0ea5e9;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font-family: Inter, "Segoe UI", system-ui, -apple-system, sans-serif; line-height: 1.5; }
+  header.hero { background: linear-gradient(120deg, #0f172a 0%, #312e81 55%, #0369a1 100%);
+                color: #fff; padding: 48px 6vw 90px; }
+  header.hero h1 { margin: 0 0 6px; font-size: 2.1rem; letter-spacing: -0.5px; }
+  header.hero p { margin: 0; color: #c7d2fe; font-size: 1rem; }
+  .pill { display: inline-block; background: rgba(255,255,255,.14); border: 1px solid rgba(255,255,255,.25);
+          padding: 3px 12px; border-radius: 99px; font-size: .8rem; margin: 14px 8px 0 0; }
+  main { max-width: 1280px; margin: -60px auto 40px; padding: 0 20px; }
+  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 16px; margin-bottom: 24px; }
+  .kpi { background: var(--card); border-radius: 16px; padding: 18px 20px; box-shadow: 0 6px 24px rgba(15,23,42,.10);
+         border-top: 4px solid var(--accent); }
+  .kpi .v { font-size: 1.9rem; font-weight: 700; letter-spacing: -1px; }
+  .kpi .l { color: var(--muted); font-size: .82rem; text-transform: uppercase; letter-spacing: .6px; }
+  .kpi .s { color: var(--muted); font-size: .8rem; margin-top: 2px; }
+  .kpi.c2 { border-color: #0ea5e9; } .kpi.c3 { border-color: #22c55e; }
+  .kpi.c4 { border-color: #f59e0b; } .kpi.c5 { border-color: #ef4444; } .kpi.c6 { border-color: #a855f7; }
+  section.card { background: var(--card); border-radius: 18px; padding: 22px 24px; margin-bottom: 24px;
+                 box-shadow: 0 4px 18px rgba(15,23,42,.07); }
+  section.card h2 { margin: 0 0 2px; font-size: 1.2rem; }
+  section.card .sub { color: var(--muted); font-size: .88rem; margin: 0 0 14px; }
+  .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(440px, 1fr)); gap: 24px; }
+  .grid2 > section.card { margin-bottom: 0; }
+  .grid-wrap { margin-bottom: 24px; }
+  .insights { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+  .insights li { background: #f8fafc; border-left: 4px solid var(--accent); border-radius: 8px; padding: 10px 14px; }
+  table { width: 100%; border-collapse: collapse; font-size: .86rem; }
+  th { text-align: left; color: var(--muted); font-weight: 600; padding: 8px 10px; border-bottom: 2px solid var(--line);
+       position: sticky; top: 0; background: #fff; }
+  td { padding: 7px 10px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+  table.sortable th { cursor: pointer; user-select: none; }
+  table.sortable th:hover { color: var(--accent); }
+  tr:hover td { background: #f8fafc; }
+  .tbl-wrap { max-height: 520px; overflow: auto; border-radius: 10px; }
+  .chip { display: inline-block; padding: 2px 10px; border-radius: 99px; color: #fff; font-size: .75rem; font-weight: 600; }
+  .bar { background: #e2e8f0; border-radius: 6px; height: 8px; width: 90px; display: inline-block; vertical-align: middle; margin-right: 8px; overflow: hidden; }
+  .bar > span { display: block; height: 100%; background: linear-gradient(90deg, #6366f1, #0ea5e9); }
+  .muted { color: var(--muted); }
+  .arrow { color: var(--muted); padding: 0 4px; }
+  footer { text-align: center; color: var(--muted); font-size: .8rem; padding: 10px 0 40px; }
+  .note { font-size: .8rem; color: var(--muted); margin-top: 8px; }
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <h1>Informe de estado del clúster Slurm</h1>
+  <p>Análisis de ${K["snapshots"]} instantáneas de <code>scontrol show node</code></p>
+  <span class="pill">📅 ${K["first"] | h} → ${K["last"] | h}</span>
+  <span class="pill">⏱ Periodo: ${K["span"] | h}</span>
+  <span class="pill">🖥 ${K["nodes"]} nodos</span>
+% if R["freq"]:
+  <span class="pill">Series agrupadas cada ${R["freq"] | h}</span>
+% endif
+</header>
+
+<main>
+
+  <div class="kpis">
+    <div class="kpi"><div class="l">Nodos</div><div class="v">${K["nodes"]}</div>
+      <div class="s">${K["usable"]} utilizables · ${K["bad"]} caídos/drenados</div></div>
+    <div class="kpi c2"><div class="l">Cores totales</div><div class="v">${num(K["cpu_total"]) | n}</div>
+      <div class="s">${num(K["cpu_pct"], 1) | n} % asignados (última instantánea)</div></div>
+    <div class="kpi c3"><div class="l">Memoria total</div><div class="v">${num(K["mem_gb"]) | n} GB</div>
+      <div class="s">${num(K["mem_pct"], 1) | n} % asignada</div></div>
+    <div class="kpi c4"><div class="l">Cambios de estado</div><div class="v">${K["transitions"]}</div>
+      <div class="s">en todo el periodo</div></div>
+    <div class="kpi c6"><div class="l">Reinicios de nodo</div><div class="v">${K["reboots"]}</div>
+      <div class="s">detectados por BootTime</div></div>
+  </div>
+
+  <section class="card">
+    <h2>✨ Resumen automático</h2>
+    <p class="sub">Hallazgos calculados sobre la última instantánea y el histórico.</p>
+    <ul class="insights">
+% for item in R["insights"]:
+      <li>${item | n}</li>
+% endfor
+    </ul>
+  </section>
+
+  <section class="card">
+    <h2>Nodos por estado</h2>
+    <p class="sub">Número de nodos en cada combinación de estados (estado completo, p. ej. <code>MIXED+PLANNED</code>) a lo largo del tiempo.</p>
+    <div id="c-nodes" style="height:440px"></div>
+  </section>
+
+  <section class="card">
+    <h2>Cores por estado</h2>
+    <p class="sub">Cores totales (CPUTot) de los nodos agrupados por su estado completo.</p>
+    <div id="c-cores" style="height:440px"></div>
+  </section>
+
+  <section class="card">
+    <h2>Solapamiento de estados · última instantánea</h2>
+    <p class="sub">Un nodo puede tener varios estados a la vez (p. ej. <code>MIXED+RESERVED</code>). El diagrama de Venn muestra
+      los ${R["venn"]["k"]} estados más frecuentes del ${K["last"] | h}; pasa el ratón por cada región para ver los nodos.</p>
+    <div class="grid2" style="gap:12px">
+      <div id="c-venn" style="height:470px"></div>
+      <div id="c-combos" style="height:470px"></div>
+    </div>
+% if R["venn"]["n_tokens"] > 3 or R["venn"]["outside"]:
+    <p class="note">
+% if R["venn"]["n_tokens"] > 3:
+      Hay ${R["venn"]["n_tokens"]} estados distintos; el Venn muestra solo los 3 más frecuentes.
+% endif
+% if R["venn"]["outside"]:
+      ${R["venn"]["outside"]} nodos no pertenecen a ninguno de los estados mostrados (ver gráfico de combinaciones).
+% endif
+    </p>
+% endif
+  </section>
+
+  <section class="card">
+    <h2>Utilización global</h2>
+    <p class="sub">CPU asignada frente a carga real de CPU y memoria asignada, sobre el total del clúster.
+      La distancia entre la CPU asignada y la carga real indica recursos reservados que no se están usando.</p>
+    <div id="c-util" style="height:360px"></div>
+  </section>
+
+  <section class="card">
+    <h2>Mapa de calor · CPU asignada por nodo</h2>
+    <p class="sub">Porcentaje de CPU efectiva asignada en cada nodo a lo largo del tiempo.</p>
+    <div id="c-heat" style="height:${R['heat']['height']}px"></div>
+  </section>
+
+  <div class="grid2 grid-wrap">
+% if R["scatter"]["groups"]:
+    <section class="card">
+      <h2>CPU asignada vs. carga real</h2>
+      <p class="sub">Cada punto es un nodo (tamaño = cores totales). Por debajo de la diagonal: reserva más cores de los que usa.</p>
+      <div id="c-scatter" style="height:400px"></div>
+    </section>
+% endif
+% if R["partitions"]:
+    <section class="card">
+      <h2>Cores por partición</h2>
+      <p class="sub">Cores asignados y libres por partición en la última instantánea (un nodo en varias particiones cuenta en cada una).</p>
+      <div id="c-parts" style="height:400px"></div>
+    </section>
+% endif
+  </div>
+
+% if R["reservations"]:
+  <section class="card">
+    <h2>Reservas activas</h2>
+    <p class="sub">Nodos y cores bajo cada reserva en la última instantánea.</p>
+    <div id="c-res" style="height:${max(220, 90 + 40 * len(R['reservations']))}px"></div>
+  </section>
+% endif
+
+  <div class="grid2 grid-wrap">
+    <section class="card">
+      <h2>Nodos más inestables</h2>
+      <p class="sub">Nodos con más cambios de estado en el periodo.</p>
+% if R["unstable"]["nodes"]:
+      <div id="c-unstable" style="height:340px"></div>
+% else:
+      <p class="muted">No se han detectado cambios de estado.</p>
+% endif
+    </section>
+    <section class="card">
+      <h2>Últimas transiciones de estado</h2>
+      <p class="sub">Los 15 cambios más recientes.</p>
+% if R["transitions"]:
+      <div class="tbl-wrap" style="max-height:340px">
+      <table>
+        <thead><tr><th>Cuándo</th><th>Nodo</th><th>Cambio</th></tr></thead>
+        <tbody>
+% for t in R["transitions"]:
+          <tr><td>${t["when"] | h}</td><td><b>${t["node"] | h}</b></td>
+              <td>${t["from"] | h}<span class="arrow">→</span><b>${t["to"] | h}</b></td></tr>
+% endfor
+        </tbody>
+      </table>
+      </div>
+% else:
+      <p class="muted">Sin transiciones registradas.</p>
+% endif
+    </section>
+  </div>
+
+% if R["events"]:
+  <section class="card">
+    <h2>Reinicios detectados</h2>
+    <p class="sub">Cambios en <code>BootTime</code> (reinicio del servidor) y <code>SlurmdStartTime</code> (reinicio del demonio) entre instantáneas consecutivas.</p>
+    <div class="tbl-wrap" style="max-height:320px">
+    <table>
+      <thead><tr><th>Detectado</th><th>Nodo</th><th>Tipo</th><th>Valor anterior → nuevo</th></tr></thead>
+      <tbody>
+% for e in R["events"]:
+        <tr><td>${e["when"] | h}</td><td><b>${e["node"] | h}</b></td><td>${e["kind"] | h}</td><td>${e["detail"] | h}</td></tr>
+% endfor
+      </tbody>
+    </table>
+    </div>
+  </section>
+% endif
+
+  <section class="card">
+    <h2>Detalle por nodo · última instantánea</h2>
+    <p class="sub">Haz clic en una cabecera para ordenar.</p>
+    <div class="tbl-wrap">
+    <table class="sortable">
+      <thead><tr>
+        <th>Nodo</th><th>Estado</th><th>Partición</th><th>CPU asignada</th><th>Carga CPU</th>
+        <th>Memoria asignada</th><th>RAM (GB)</th><th>Uptime (días)</th><th>Reserva</th>
+      </tr></thead>
+      <tbody>
+% for r in R["table"]:
+        <tr>
+          <td><b>${r["node"] | h}</b></td>
+          <td data-v="${r['state'] | h}"><span class="chip" style="background:${r['color']}">${r["state"] | h}</span></td>
+          <td>${r["part"] | h}</td>
+          <td data-v="${r['cpu_pct'] if r['cpu_pct'] == r['cpu_pct'] else -1}">
+            <span class="bar"><span style="width:${min(100, r['cpu_pct']) if r['cpu_pct'] == r['cpu_pct'] else 0}%"></span></span>${num(r["alloc"]) | n}/${num(r["eff"]) | n}
+          </td>
+          <td data-v="${r['load'] if r['load'] == r['load'] else -1}">${num(r["load"], 1) | n}</td>
+          <td data-v="${r['mem_pct'] if r['mem_pct'] == r['mem_pct'] else -1}">
+            <span class="bar"><span style="width:${min(100, r['mem_pct']) if r['mem_pct'] == r['mem_pct'] else 0}%"></span></span>${num(r["mem_pct"]) | n} %
+          </td>
+          <td data-v="${r['mem_gb'] if r['mem_gb'] else -1}">${num(r["mem_gb"]) | n}</td>
+          <td data-v="${r['uptime'] if r['uptime'] is not None else -1}">${num(r["uptime"], 1) | n}</td>
+          <td>${r["res"] | h}</td>
+        </tr>
+% endfor
+      </tbody>
+    </table>
+    </div>
+  </section>
+
+</main>
+
+<footer>Informe generado con Mako + Plotly · datos de ${K["first"] | h} a ${K["last"] | h}</footer>
+
+<script>
+const R = ${J(R) | n};
+const CFG = {responsive: true, displaylogo: false};
+const FONT = "Inter, 'Segoe UI', system-ui, sans-serif";
+const GRID = '#e2e8f0';
+
+function layout(extra) {
+  const l = Object.assign({
+    font: {family: FONT, color: '#334155', size: 12},
+    paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
+    margin: {l: 55, r: 20, t: 10, b: 45},
+    legend: {orientation: 'h', y: -0.2},
+    hovermode: 'x unified'
+  }, extra || {});
+  if (l.xaxis && l.xaxis.visible !== false) {
+    l.xaxis.automargin = true;
+    if (l.xaxis.tickangle === undefined) { l.xaxis.tickangle = -35; }
+  }
+  return l;
+}
+function pretty(xs) { return xs.map(function(s) { return s.replace('T', ' '); }); }
+function few(pack) { return pack.x.length <= 40; }
+
+function stacked(id, pack, ytitle) {
+  const isFew = few(pack);
+  const x = isFew ? pretty(pack.x) : pack.x;
+  const traces = pack.series.map(function(s) {
+    if (isFew) {
+      return {type: 'bar', x: x, y: s.y, name: s.name, marker: {color: s.color}};
+    }
+    return {type: 'scatter', mode: 'lines', x: x, y: s.y, name: s.name, stackgroup: 'one',
+            line: {width: 0.8, color: s.color}, fillcolor: s.color + 'cc'};
+  });
+  Plotly.newPlot(id, traces, layout({
+    barmode: 'stack',
+    legend: {orientation: 'v', x: 1.01, y: 1, xanchor: 'left', font: {size: 11}},
+    margin: {l: 55, r: 10, t: 10, b: 45},
+    xaxis: {type: isFew ? 'category' : 'date', gridcolor: GRID},
+    yaxis: {title: ytitle, gridcolor: GRID}
+  }), CFG);
+}
+
+stacked('c-nodes', R.nodes_state, 'nodos');
+stacked('c-cores', R.cores_state, 'cores');
+
+/* ---- Utilización global ---- */
+(function() {
+  const U = R.util, isFew = few(U);
+  const x = isFew ? pretty(U.x) : U.x;
+  const traces = U.series.map(function(s) {
+    return {type: 'scatter', mode: isFew ? 'lines+markers' : 'lines', x: x, y: s.y, name: s.name,
+            line: {color: s.color, width: 3}, marker: {size: 8}, connectgaps: true};
+  });
+  Plotly.newPlot('c-util', traces, layout({
+    legend: {orientation: 'h', y: -0.45, yanchor: 'top'},
+    margin: {l: 55, r: 20, t: 10, b: 110},
+    xaxis: {type: isFew ? 'category' : 'date', gridcolor: GRID},
+    yaxis: {title: '%', range: [0, 105], gridcolor: GRID}
+  }), CFG);
+})();
+
+/* ---- Heatmap ---- */
+(function() {
+  const H = R.heat, isFew = H.x.length <= 40;
+  Plotly.newPlot('c-heat', [{
+    type: 'heatmap', x: isFew ? pretty(H.x) : H.x, y: H.y, z: H.z, zmin: 0, zmax: 100,
+    colorscale: [[0, '#f0f9ff'], [0.35, '#a5b4fc'], [0.7, '#6366f1'], [1, '#9f1239']],
+    colorbar: {title: '% CPU', thickness: 12}, xgap: isFew ? 2 : 0, ygap: 2,
+    hovertemplate: '%{y}<br>%{x}<br><b>%{z:.0f} %</b> CPU asignada<extra></extra>'
+  }], layout({
+    hovermode: 'closest', margin: {l: 70, r: 20, t: 10, b: 45},
+    xaxis: {type: isFew ? 'category' : 'date'},
+    yaxis: {type: 'category', autorange: 'reversed'}
+  }), CFG);
+})();
+
+/* ---- Venn ---- */
+(function() {
+  const V = R.venn;
+  const labels = {
+    type: 'scatter', mode: 'text', x: V.labels.map(function(l) { return l.x; }),
+    y: V.labels.map(function(l) { return l.y; }),
+    text: V.labels.map(function(l) { return '<b>' + l.n + '</b>'; }),
+    hovertext: V.labels.map(function(l) { return l.hover; }), hoverinfo: 'text',
+    textfont: {size: 24, color: '#0f172a'}
+  };
+  const names = {
+    type: 'scatter', mode: 'text', x: V.names.map(function(n) { return n.x; }),
+    y: V.names.map(function(n) { return n.y; }), text: V.names.map(function(n) { return n.text; }),
+    textfont: {size: 14, color: V.names.map(function(n) { return n.color; })}, hoverinfo: 'skip'
+  };
+  Plotly.newPlot('c-venn', [names, labels], layout({
+    shapes: V.shapes, showlegend: false, hovermode: 'closest',
+    margin: {l: 10, r: 10, t: 10, b: 10},
+    xaxis: {visible: false, range: [-2.6, 2.6], fixedrange: true},
+    yaxis: {visible: false, range: [-2.5, 2.3], scaleanchor: 'x', fixedrange: true}
+  }), CFG);
+})();
+
+/* ---- Combinaciones de estado ---- */
+(function() {
+  const C = R.combos.slice(0, 12).reverse();
+  Plotly.newPlot('c-combos', [{
+    type: 'bar', orientation: 'h', y: C.map(function(c) { return c.state; }),
+    x: C.map(function(c) { return c.n; }), marker: {color: C.map(function(c) { return c.color; })},
+    text: C.map(function(c) { return c.n; }), textposition: 'outside',
+    hovertext: C.map(function(c) { return c.nodes; }), hovertemplate: '%{y}: %{x} nodos<br>%{hovertext}<extra></extra>'
+  }], layout({
+    hovermode: 'closest', margin: {l: 150, r: 30, t: 30, b: 40},
+    title: {text: 'Combinaciones de estado (nº de nodos)', font: {size: 13}},
+    xaxis: {gridcolor: GRID}, yaxis: {automargin: true}
+  }), CFG);
+})();
+
+/* ---- Asignado vs carga ---- */
+(function() {
+  if (!R.scatter.groups.length) return;
+  const m = Math.ceil(R.scatter.max * 1.05) || 1;
+  const traces = R.scatter.groups.map(function(g) {
+    return {type: 'scatter', mode: 'markers', name: g.state, x: g.x, y: g.y, text: g.text,
+            marker: {color: g.color, size: g.size, sizemode: 'area', sizeref: 2 * 130 / (28 * 28), sizemin: 8,
+                     opacity: 0.8, line: {color: '#fff', width: 1}},
+            hovertemplate: '<b>%{text}</b><br>Asignada: %{x}<br>Carga: %{y}<extra>' + g.state + '</extra>'};
+  });
+  traces.push({type: 'scatter', mode: 'lines', x: [0, m], y: [0, m], hoverinfo: 'skip', showlegend: false,
+               line: {color: '#94a3b8', dash: 'dot', width: 1.5}});
+  Plotly.newPlot('c-scatter', traces, layout({
+    hovermode: 'closest',
+    xaxis: {title: 'Cores asignados', gridcolor: GRID, range: [0, m]},
+    yaxis: {title: 'Carga de CPU', gridcolor: GRID, range: [0, m]}
+  }), CFG);
+})();
+
+/* ---- Particiones ---- */
+(function() {
+  if (!R.partitions.length) return;
+  const P = R.partitions;
+  Plotly.newPlot('c-parts', [
+    {type: 'bar', orientation: 'h', name: 'Asignados', y: P.map(function(p) { return p.name; }),
+     x: P.map(function(p) { return p.alloc; }), marker: {color: '#6366f1'}},
+    {type: 'bar', orientation: 'h', name: 'Libres', y: P.map(function(p) { return p.name; }),
+     x: P.map(function(p) { return p.idle; }), marker: {color: '#cbd5e1'},
+     text: P.map(function(p) { return p.nodes + ' nodos'; }), textposition: 'inside'}
+  ], layout({barmode: 'stack', hovermode: 'closest', margin: {l: 120, r: 20, t: 10, b: 45},
+             xaxis: {title: 'cores', gridcolor: GRID}, yaxis: {automargin: true}}), CFG);
+})();
+
+/* ---- Reservas ---- */
+(function() {
+  if (!R.reservations.length) return;
+  const S = R.reservations;
+  Plotly.newPlot('c-res', [{
+    type: 'bar', orientation: 'h', y: S.map(function(s) { return s.name; }), x: S.map(function(s) { return s.cores; }),
+    marker: {color: '#14b8a6'}, text: S.map(function(s) { return s.nodes + ' nodos'; }), textposition: 'auto'
+  }], layout({hovermode: 'closest', margin: {l: 140, r: 20, t: 10, b: 45},
+              xaxis: {title: 'cores', gridcolor: GRID}, yaxis: {automargin: true}}), CFG);
+})();
+
+/* ---- Inestabilidad ---- */
+(function() {
+  if (!R.unstable.nodes.length) return;
+  Plotly.newPlot('c-unstable', [{
+    type: 'bar', orientation: 'h', y: R.unstable.nodes, x: R.unstable.n,
+    marker: {color: '#f59e0b'}, text: R.unstable.n, textposition: 'outside'
+  }], layout({hovermode: 'closest', margin: {l: 80, r: 30, t: 10, b: 45},
+              xaxis: {title: 'cambios de estado', gridcolor: GRID}, yaxis: {type: 'category', automargin: true}}), CFG);
+})();
+
+/* ---- Tabla ordenable ---- */
+document.querySelectorAll('table.sortable th').forEach(function(th, i) {
+  th.addEventListener('click', function() {
+    const tb = th.closest('table').tBodies[0];
+    const rows = Array.from(tb.rows);
+    const dir = th.dataset.dir === 'asc' ? -1 : 1;
+    th.parentNode.querySelectorAll('th').forEach(function(x) { x.dataset.dir = ''; });
+    th.dataset.dir = dir === 1 ? 'asc' : 'desc';
+    rows.sort(function(a, b) {
+      const x = a.cells[i].dataset.v || a.cells[i].textContent.trim();
+      const y = b.cells[i].dataset.v || b.cells[i].textContent.trim();
+      const nx = parseFloat(x), ny = parseFloat(y);
+      if (!isNaN(nx) && !isNaN(ny)) return (nx - ny) * dir;
+      return x.localeCompare(y, undefined, {numeric: true}) * dir;
+    });
+    rows.forEach(function(r) { tb.appendChild(r); });
+  });
+});
+</script>
+</body>
+</html>
