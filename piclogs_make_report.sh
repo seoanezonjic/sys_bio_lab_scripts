@@ -39,9 +39,9 @@ SCRIPT_FILE=$(realpath "${BASH_SOURCE[0]}")
 SCRIPT_PATH=$(dirname "$SCRIPT_FILE")
 aux_dir=$SCRIPT_PATH/piclogs_aux_files 
 
-logs_dir=~pedro/piclogs 
-reports_dir=$logs_dir/reports 
-tar_DB_path="$logs_dir/piclogs.tar" 
+piclogs_dir=~pedro/piclogs 
+reports_dir=$piclogs_dir/reports 
+logs_dir="$piclogs_dir/logs" 
 
 # 5. Comportamiento por defecto para el output_file
 if [[ -z "$output_file" ]]; then
@@ -51,7 +51,7 @@ fi
 
 # 6. Construir de forma dinámica los argumentos para Python usando un array
 cmd_args=(
-    "-i" "$tar_DB_path"
+    "-i" "$logs_dir"
     "-o" "$output_file"
     "-t" "$aux_dir/template.txt"
 )

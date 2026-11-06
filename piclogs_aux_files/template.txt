@@ -38,6 +38,10 @@ STATE_COLORS = {
 }
 FALLBACK = ["#ec4899", "#84cc16", "#0ea5e9", "#eab308", "#d946ef", "#10b981", "#f43f5e", "#6366f1"]
 BAD_PREFIXES = ("DOWN", "DRAIN", "FAIL", "NOT_RESP", "INVAL")
+# Estados de funcionamiento normal. Un nodo está NO disponible si tiene ALGÚN estado fuera de esta lista
+# (DOWN, DRAIN, DRAINING, DRAINED, RESERVED, NOT_RESPONDING, FAIL, MAINT, FUTURE, UNKNOWN...).
+NORMAL_TOKENS = {"IDLE", "MIXED", "ALLOCATED", "COMPLETING", "PLANNED", "CLOUD",
+                 "POWERED_DOWN", "POWERING_UP", "POWERING_DOWN"}
 
 VENN_GEOM = {
     1: {"c": [(0, 0)], "lab": {(1,): (0, 0)}, "name": [(0, 1.5)]},
@@ -229,6 +233,19 @@ def build(df):
     cor = d.groupby(["timestamp", "state_group"])["CPUTot"].sum().unstack(fill_value=0).sort_index()
     R["nodes_state"] = pack(rs(cnt, freq), ccolors)
     R["cores_state"] = pack(rs(cor, freq), ccolors, 0)
+
+    # 1b) Nodos Disponibles vs. No disponibles (cualquier estado fuera de NORMAL_TOKENS como IDLE+RESERVED)
+    d["avail_status"] = np.where(
+        d["state_tokens"].map(lambda s: any(t not in NORMAL_TOKENS for t in s.split("+") if t)),
+        "No disponible",
+        "Disponible"
+    )
+    avail_colors = {"Disponible": "#22c55e", "No disponible": "#ef4444"}
+    avail_order = ["Disponible", "No disponible"]
+    cnt_u = d.groupby(["timestamp", "avail_status"]).size().unstack(fill_value=0).reindex(columns=avail_order, fill_value=0).sort_index()
+    cor_u = d.groupby(["timestamp", "avail_status"])["CPUTot"].sum().unstack(fill_value=0).reindex(columns=avail_order, fill_value=0).sort_index()
+    R["nodes_unavail"] = pack(rs(cnt_u, freq), avail_colors, keep_order=True)
+    R["cores_unavail"] = pack(rs(cor_u, freq), avail_colors, 0, keep_order=True)   
 
     # 2) Utilización global: asignado vs. carga real
     agg = {"cpu_alloc": ("CPUAlloc", "sum"), "cpu_eff": ("CPUEfctv", "sum"),
@@ -504,6 +521,20 @@ K = R["kpi"]
     <div id="c-cores" style="height:440px"></div>
   </section>
 
+  % if R["nodes_unavail"]:
+    <section class="card">
+      <h2>Disponibilidad de nodos</h2>
+      <p class="sub">Comparativa de nodos utilizables frente a nodos con <b>alguna</b> condición que los hace no disponibles para el usuario (DOWN, DRAIN, RESERVED, NOT_RESPONDING, FAIL…), aunque tengan además un estado normal (p. ej. <code>IDLE+RESERVED</code>).</p>
+      <div id="c-nodes-unavail" style="height:440px"></div>
+    </section>
+
+    <section class="card">
+      <h2>Disponibilidad de cores</h2>
+      <p class="sub">Cores totales (CPUTot) disponibles frente a los cores en nodos no utilizables por el usuario.</p>
+      <div id="c-cores-unavail" style="height:440px"></div>
+    </section>
+  % endif
+
   <section class="card">
     <h2>Solapamiento de estados · última instantánea</h2>
     <p class="sub">Un nodo puede tener varios estados a la vez (p. ej. <code>MIXED+RESERVED</code>). El diagrama de Venn muestra
@@ -690,6 +721,11 @@ function stacked(id, pack, ytitle) {
 
 stacked('c-nodes', R.nodes_state, 'nodos');
 stacked('c-cores', R.cores_state, 'cores');
+
+if (R.nodes_unavail) {
+  stacked('c-nodes-unavail', R.nodes_unavail, 'nodos');
+  stacked('c-cores-unavail', R.cores_unavail, 'cores');
+}
 
 /* ---- Utilización global ---- */
 (function() {

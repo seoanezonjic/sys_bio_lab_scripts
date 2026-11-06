@@ -63,32 +63,40 @@ def expand_inputs(items):
             unique.append(p)
     return unique
 
-
+# Nº de dígitos del epoch -> divisor para pasarlo a segundos (10=s, 13=ms, 16=µs, 19=ns)
+EPOCH_DIVISOR = {10: 1, 13: 1_000, 16: 1_000_000, 19: 1_000_000_000}
 def timestamp_from_name(name):
+    """Fecha de un log a partir de su nombre.
+
+    Acepta el epoch de bash (p. ej. 1761820490123 o 1761820490123.log, de `date +%s%3N`) y,
+    por compatibilidad, el formato antiguo AAAA_MM_DD_hh_mm_ss. El epoch se convierte a la
+    hora local de la máquina, igual que hacía antes `date +%Y_%m_%d_%H_%M_%S`.
+    """
+    stem = os.path.splitext(name)[0]
+    if stem.isdigit() and len(stem) in EPOCH_DIVISOR:
+        return datetime.fromtimestamp(int(stem) / EPOCH_DIVISOR[len(stem)])
     m = FILENAME_RE.search(name)
     if not m:
         return None
     return datetime(*map(int, m.groups()))
 
 
-def iter_tar_logs(tar_path):
-    """Itera (nombre_log, timestamp, texto) de todos los .log dentro de un tar."""
-    # ignore_zeros=True: tolera los bloques de ceros que deja un tar con muchos appends
-    with tarfile.open(tar_path, "r:*", ignore_zeros=True) as tf:
-        for member in tf:
-            if not member.isfile():
-                continue
-            base = os.path.basename(member.name)
-            ts = timestamp_from_name(base)
-            if ts is None:
-                print(f"[aviso] {tar_path}: '{member.name}' sin fecha en el nombre, se omite", file=sys.stderr)
-                continue
-            if not in_range(ts):  # se descarta antes de leer el contenido
-                continue
-            fh = tf.extractfile(member)
-            if fh is None:
-                continue
-            yield base, ts, fh.read().decode("utf-8", errors="replace")
+def iter_dir_logs(dir_path):
+    """Itera (nombre_log, timestamp, texto) de los logs sueltos dentro de una carpeta."""
+    skipped = 0
+    for entry in sorted(os.scandir(dir_path), key=lambda e: e.name):
+        if not entry.is_file():
+            continue
+        ts = timestamp_from_name(entry.name)
+        if ts is None:  # no es un log (p. ej. un piclogs.tar que quede en la carpeta)
+            skipped += 1
+            continue
+        if not in_range(ts):  # se descarta antes de abrir el archivo
+            continue
+        with open(entry.path, "r", encoding="utf-8", errors="replace") as fh:
+            yield entry.name, ts, fh.read()
+    if skipped:
+        print(f"[aviso] {dir_path}: {skipped} archivos sin fecha en el nombre, omitidos", file=sys.stderr)
 
 
 def parse_snapshot(text):
@@ -172,8 +180,8 @@ def in_range(ts):
 parser = argparse.ArgumentParser(description="Carga logs de 'scontrol show node' desde archivos tar.")
 parser.add_argument(
     "-i", "--input", nargs="+", required=True,
-    help="Uno o varios .tar. Admite varios argumentos, listas separadas por comas "
-         "y comodines (glob) como 'logs/*.tar'.",
+    help="Una o varias carpetas con logs sueltos. Admite varios argumentos, "
+         "listas separadas por comas y comodines (glob) como 'logs/sub*/'.",
 )
 parser.add_argument(
     "-o", "--output", dest="output_report", default=None,
@@ -229,21 +237,23 @@ DATE_TO = parse_date_bound(args.date_end, "--date_end")[1] if args.date_end else
 if DATE_FROM is not None and DATE_TO is not None and DATE_FROM >= DATE_TO:
     sys.exit("--date_start debe ser anterior a --date_end")
 
-tar_paths = expand_inputs(args.input)
-if not tar_paths:
-    sys.exit("No se ha encontrado ningún archivo tar con los patrones indicados.")
+file_paths = expand_inputs(args.input)
+if not file_paths:
+    sys.exit("No se ha encontrado ninguna carpeta con los patrones indicados.")
 
 records = []
-for tar_path in tar_paths:
+for src_path in file_paths:
     n_logs = 0
-    for log_name, ts, text in iter_tar_logs(tar_path):
+    # carpeta con logs sueltos o archivo tar
+    source = iter_dir_logs(src_path)
+    for log_name, ts, text in source:
         n_logs += 1
         for node in parse_snapshot(text):
-            node["source_tar"] = os.path.basename(tar_path)
+            node["source_tar"] = os.path.basename(os.path.normpath(src_path))
             node["source_file"] = log_name
             node["timestamp"] = ts
             records.append(node)
-    print(f"[ok] {tar_path}: {n_logs} logs", file=sys.stderr)
+    print(f"[ok] {src_path}: {n_logs} logs", file=sys.stderr)
 
 if not records:
     sys.exit("No se ha podido parsear ningún nodo.")
