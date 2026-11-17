@@ -42,6 +42,7 @@ aux_dir=$SCRIPT_PATH/piclogs_aux_files
 piclogs_dir=~pedro/piclogs 
 reports_dir=$piclogs_dir/reports 
 logs_dir="$piclogs_dir/logs" 
+sq_logs_dir="$piclogs_dir/sq_logs" 
 
 # 5. Comportamiento por defecto para el output_file
 if [[ -z "$output_file" ]]; then
@@ -52,6 +53,7 @@ fi
 # 6. Construir de forma dinámica los argumentos para Python usando un array
 cmd_args=(
     "-i" "$logs_dir"
+    "-q" "$sq_logs_dir"
     "-o" "$output_file"
     "-t" "$aux_dir/template.txt"
 )

@@ -410,10 +410,47 @@ def build(df):
         ins.append("Sin incidencias destacables en el periodo analizado.")
     R["insights"] = ins
     return R
+
+
+# ----------------------------- squeue -------------------------------------- #
+# (columna, título, subtítulo, unidad del eje Y, color)
+SQ_META = [
+    ("JOBS", "Jobs", "Valor JOBS registrado por squeue en cada instantánea.", "jobs", "#6366f1"),
+    ("USERS", "Usuarios", "Valor USERS registrado por squeue en cada instantánea.", "usuarios", "#0ea5e9"),
+    ("CPUS", "CPUs", "Valor CPUS registrado por squeue en cada instantánea.", "CPUs", "#f59e0b"),
+]
+
+
+def build_squeue(dsq):
+    """Series temporales de squeue (JOBS, USERS, CPUS). Devuelve None si no hay datos."""
+    if dsq is None or len(dsq) == 0:
+        return None
+    s = dsq.copy()
+    s["timestamp"] = pd.to_datetime(s["timestamp"])
+    s = s.sort_values("timestamp").drop_duplicates("timestamp", keep="last").set_index("timestamp")
+    t0, t1 = s.index.min(), s.index.max()
+    freq = pick_freq(t0, t1, len(s))
+    charts, kpis = [], []
+    for col, title, sub, unit, color in SQ_META:
+        if col not in s:
+            continue
+        y = pd.to_numeric(s[col], errors="coerce")
+        if not y.notna().any():
+            continue
+        charts.append({"id": "c-sq-" + col.lower(), "title": title, "sub": sub, "ytitle": unit,
+                       "pack": pack(rs(y.to_frame(title), freq), {title: color}, 1, keep_order=True)})
+        last_y = y.dropna()
+        kpis.append({"label": title, "last": float(last_y.iloc[-1]), "last_at": fmt_ts(last_y.index[-1]),
+                     "max": float(y.max()), "max_at": fmt_ts(y.idxmax())})
+    if not charts:
+        return None
+    return {"charts": charts, "kpis": kpis, "n": int(len(s)), "freq": freq or "",
+            "first": fmt_ts(t0), "last": fmt_ts(t1)}
 %>
 <%
 R = build(df)
 K = R["kpi"]
+SQ = build_squeue(plotter.hash_vars.get("df_sq"))
 %>
 <!DOCTYPE html>
 <html lang="es">
@@ -530,7 +567,11 @@ K = R["kpi"]
 
     <section class="card">
       <h2>Disponibilidad de cores</h2>
-      <p class="sub">Cores totales (CPUTot) disponibles frente a los cores en nodos no utilizables por el usuario.</p>
+      <p class="sub">Cores totales (CPUTot) disponibles frente a los cores en nodos no utilizables por el usuario.
+% if SQ and any(c["id"] == "c-sq-cpus" for c in SQ["charts"]):
+        La línea punteada muestra las CPUs registradas por <code>squeue</code> (CPUS), sobre los mismos ejes.
+% endif
+      </p>
       <div id="c-cores-unavail" style="height:440px"></div>
     </section>
   % endif
@@ -561,6 +602,31 @@ K = R["kpi"]
       La distancia entre la CPU asignada y la carga real indica recursos reservados que no se están usando.</p>
     <div id="c-util" style="height:360px"></div>
   </section>
+
+% if SQ:
+  <section class="card">
+    <h2>Cola de Slurm · squeue</h2>
+    <p class="sub">Jobs, usuarios y CPUs registrados por <code>squeue</code> en ${SQ["n"]} instantáneas
+      (${SQ["first"] | h} → ${SQ["last"] | h}).</p>
+% if SQ["freq"]:
+    <p class="note">Series agrupadas cada ${SQ["freq"] | h} (media) para mantener los gráficos ligeros.</p>
+% endif
+    <div class="kpis" style="margin-bottom:0">
+% for k in SQ["kpis"]:
+      <div class="kpi c2"><div class="l">${k["label"] | h}</div><div class="v">${num(k["last"]) | n}</div>
+        <div class="s">último valor · pico ${num(k["max"]) | n} (${k["max_at"] | h})</div></div>
+% endfor
+    </div>
+  </section>
+
+% for c in SQ["charts"]:
+  <section class="card">
+    <h2>${c["title"] | h} a lo largo del tiempo</h2>
+    <p class="sub">${c["sub"] | h}</p>
+    <div id="${c['id']}" style="height:320px"></div>
+  </section>
+% endfor
+% endif
 
   <section class="card">
     <h2>Mapa de calor · CPU asignada por nodo</h2>
@@ -679,6 +745,7 @@ K = R["kpi"]
 
 <script>
 const R = ${J(R) | n};
+const SQ = ${J(SQ) | n};
 const CFG = {responsive: true, displaylogo: false};
 const FONT = "Inter, 'Segoe UI', system-ui, sans-serif";
 const GRID = '#e2e8f0';
@@ -700,9 +767,12 @@ function layout(extra) {
 function pretty(xs) { return xs.map(function(s) { return s.replace('T', ' '); }); }
 function few(pack) { return pack.x.length <= 40; }
 
-function stacked(id, pack, ytitle) {
+// overlay (opcional): {x, y, name, color}. Línea independiente (no apilada) sobre los mismos ejes.
+function stacked(id, pack, ytitle, overlay) {
   const isFew = few(pack);
-  const x = isFew ? pretty(pack.x) : pack.x;
+  // con una línea superpuesta el eje X debe ser temporal para que ambas series se alineen por fecha
+  const useDate = !isFew || !!overlay;
+  const x = useDate ? pack.x : pretty(pack.x);
   const traces = pack.series.map(function(s) {
     if (isFew) {
       return {type: 'bar', x: x, y: s.y, name: s.name, marker: {color: s.color}};
@@ -710,11 +780,16 @@ function stacked(id, pack, ytitle) {
     return {type: 'scatter', mode: 'lines', x: x, y: s.y, name: s.name, stackgroup: 'one',
             line: {width: 0.8, color: s.color}, fillcolor: s.color + 'cc'};
   });
+  if (overlay) {
+    traces.push({type: 'scatter', mode: 'lines+markers', x: overlay.x, y: overlay.y, name: overlay.name,
+                 line: {color: overlay.color, width: 3, dash: 'dot'}, marker: {size: 6, color: overlay.color},
+                 connectgaps: true});
+  }
   Plotly.newPlot(id, traces, layout({
     barmode: 'stack',
     legend: {orientation: 'v', x: 1.01, y: 1, xanchor: 'left', font: {size: 11}},
     margin: {l: 55, r: 10, t: 10, b: 45},
-    xaxis: {type: isFew ? 'category' : 'date', gridcolor: GRID},
+    xaxis: {type: useDate ? 'date' : 'category', gridcolor: GRID},
     yaxis: {title: ytitle, gridcolor: GRID}
   }), CFG);
 }
@@ -724,7 +799,11 @@ stacked('c-cores', R.cores_state, 'cores');
 
 if (R.nodes_unavail) {
   stacked('c-nodes-unavail', R.nodes_unavail, 'nodos');
-  stacked('c-cores-unavail', R.cores_unavail, 'cores');
+  // CPUs solicitadas (squeue) como línea superpuesta, si hay datos de squeue
+  const sqCpus = SQ && SQ.charts.find(function(c) { return c.id === 'c-sq-cpus'; });
+  stacked('c-cores-unavail', R.cores_unavail, 'cores', sqCpus ? {
+    x: sqCpus.pack.x, y: sqCpus.pack.series[0].y, name: 'CPUs solicitadas (squeue)', color: '#0f172a'
+  } : null);
 }
 
 /* ---- Utilización global ---- */
@@ -741,6 +820,23 @@ if (R.nodes_unavail) {
     xaxis: {type: isFew ? 'category' : 'date', gridcolor: GRID},
     yaxis: {title: '%', range: [0, 105], gridcolor: GRID}
   }), CFG);
+})();
+
+/* ---- squeue: series temporales ---- */
+(function() {
+  if (!SQ) return;
+  SQ.charts.forEach(function(c) {
+    const s = c.pack.series[0], few = c.pack.x.length <= 60;
+    Plotly.newPlot(c.id, [{
+      type: 'scatter', mode: few ? 'lines+markers' : 'lines', x: c.pack.x, y: s.y, name: c.title,
+      line: {color: s.color, width: 2.5}, marker: {size: 6}, fill: 'tozeroy', fillcolor: s.color + '22'
+    }], layout({
+      showlegend: false,
+      margin: {l: 60, r: 20, t: 10, b: 45},
+      xaxis: {type: 'date', gridcolor: GRID},
+      yaxis: {title: c.ytitle, gridcolor: GRID, rangemode: 'tozero'}
+    }), CFG);
+  });
 })();
 
 /* ---- Heatmap ---- */

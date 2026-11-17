@@ -116,6 +116,19 @@ def parse_snapshot(text):
     return nodes
 
 
+def parse_squeue_text(text):
+    """TSV de dos columnas (USERS|JOBS|CPUS <TAB> n) -> {'USERS': 12, 'JOBS': 340, 'CPUS': 1800}.
+
+    Ignora cualquier línea que no sea una de esas claves con un entero (archivo vacío -> {}).
+    """
+    out = {}
+    for raw in text.splitlines():
+        parts = raw.strip().split()
+        if len(parts) == 2 and parts[0] in SQUEUE_KEYS and parts[1].isdigit():
+            out[parts[0]] = int(parts[1])
+    return out
+
+
 def split_state(raw):
     """'MIXED+RESERVED*' -> (base, flags, suffix, tokens)."""
     if not isinstance(raw, str) or not raw.strip():
@@ -192,6 +205,11 @@ parser.add_argument(
     help="(Opcional) ruta a un template de Mako para generar un informe HTML. ",
 )
 parser.add_argument(
+    "-q", "--squeue_input", nargs="+", default=None,
+    help="(Opcional) una o varias carpetas con los logs de squeue (tsv de 2 columnas: USERS/JOBS/CPUS). "
+         "Mismos formatos que --input. Respeta --date_start/--date_end.",
+)
+parser.add_argument(
     "--date_start", default=None,
     help="Solo registros desde esta fecha (incluida). Resolución incremental: AAAA, AAAA-MM, "
          "AAAA-MM-DD, AAAA-MM-DD-HH o AAAA-MM-DD-HH:MM.",
@@ -211,6 +229,7 @@ FILENAME_RE = re.compile(r"(\d{4})_(\d{2})_(\d{2})_(\d{2})_(\d{2})_(\d{2})")
 # (así se soportan valores con espacios como OS=Linux ... o Reason=...)
 KV_RE = re.compile(r"(?<!\S)([A-Za-z_][\w.]*)=(.*?)(?=\s+[A-Za-z_][\w.]*=|\s*$)")
 STATE_SYMBOLS = "*~#!%$@^-"
+SQUEUE_KEYS = ("USERS", "JOBS", "CPUS")
 
 NUMERIC_COLS = [
     "CoresPerSocket", "CPUAlloc", "CPUEfctv", "CPUTot", "CPULoad", "RealMemory",
@@ -339,9 +358,40 @@ print(
 #    else:
 #        print(f"[aviso] extensión '{ext}' no reconocida, no se guarda archivo", file=sys.stderr)
 
-# `df` queda como variable final: es la tabla que consume la plantilla de Mako.
+# --------------------------------------------------------------------------- #
+# squeue (opcional): usuarios, jobs y cpus a lo largo del tiempo
+# --------------------------------------------------------------------------- #
+sq_records, n_empty = [], 0
+for sq_path in expand_inputs(args.squeue_input or []):
+    n_logs = 0
+    for log_name, ts, text in iter_dir_logs(sq_path):  # mismo filtro de fechas que scontrol
+        vals = parse_squeue_text(text)
+        if not vals:  # archivo vacío o squeue sin salida
+            n_empty += 1
+            continue
+        n_logs += 1
+        sq_records.append({"timestamp": ts, "source_file": log_name, **vals})
+    print(f"[ok] {sq_path}: {n_logs} logs de squeue", file=sys.stderr)
+if n_empty:
+    print(f"[aviso] {n_empty} logs de squeue vacíos o sin USERS/JOBS/CPUS, omitidos", file=sys.stderr)
+
+df_sq = pd.DataFrame(sq_records, columns=["timestamp", "source_file", *SQUEUE_KEYS])
+df_sq["timestamp"] = pd.to_datetime(df_sq["timestamp"])
+df_sq = df_sq.drop_duplicates(subset=["timestamp"], keep="last")
+for col in SQUEUE_KEYS:
+    df_sq[col] = pd.to_numeric(df_sq[col], errors="coerce")
+df_sq["anio"] = df_sq["timestamp"].dt.year
+df_sq["mes"] = df_sq["timestamp"].dt.month
+df_sq["dia"] = df_sq["timestamp"].dt.day
+df_sq["hora"] = df_sq["timestamp"].dt.hour
+df_sq["minuto"] = df_sq["timestamp"].dt.minute
+df_sq["segundo"] = df_sq["timestamp"].dt.second
+df_sq = df_sq.sort_values("timestamp").reset_index(drop=True)
+print(f"[ok] tabla squeue lista: {len(df_sq):,} instantáneas", file=sys.stderr)
+
+# `df` y `df_sq` quedan como variables finales: son las tablas que consume la plantilla de Mako.
 current_dir = os.path.dirname(os.path.abspath(__file__))
-container = {"df": df}
+container = {"df": df, "df_sq": df_sq}
 template = open(args.template).read()
 report = Py_report_html(container, os.path.basename(args.output_report), True)
 report.data_from_files = False
