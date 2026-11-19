@@ -15,6 +15,7 @@ R = build(df)
 K = R["kpi"]
 %>
 <%!
+import colorsys
 import html
 import json
 import math
@@ -118,19 +119,33 @@ COMBO_PALETTE = ["#22c55e", "#f59e0b", "#3b82f6", "#ef4444", "#a855f7", "#06b6d4
                  "#8b5cf6", "#fb7185", "#65a30d", "#0891b2"]
 
 
+def _generated_color(k):
+    """Color nº k generado con el ángulo áureo (tonos muy separados), para cuando la paleta se agota."""
+    h = (k * 0.61803398875) % 1.0
+    l = (0.45, 0.58, 0.70)[k % 3]
+    r, g, b = colorsys.hls_to_rgb(h, l, 0.65)
+    return "#%02x%02x%02x" % (int(r * 255), int(g * 255), int(b * 255))
+
+
 def make_combo_colors(names):
-    """Un color distinto por cada combinación de estados (los estados simples conservan su color)."""
+    """Un color distinto por cada combinación de estados (los estados simples conservan su color).
+
+    Usa COMBO_PALETTE y, si hay más combinaciones que colores, genera colores nuevos (sin límite).
+    """
     ordered = sorted(names, key=state_sort)
     colors = {n: STATE_COLORS[n] for n in ordered if n in STATE_COLORS}
     used = set(colors.values())
-    extra = iter(COMBO_PALETTE * 5)
+    palette = iter(COMBO_PALETTE)
+    k = 0
     for n in ordered:
-        if n not in colors:
-            c = next(extra)
-            while c in used:
-                c = next(extra)
-            colors[n] = c
-            used.add(c)
+        if n in colors:
+            continue
+        c = next((p for p in palette if p not in used), None)
+        while c is None or c in used:
+            k += 1
+            c = _generated_color(k)
+        colors[n] = c
+        used.add(c)
     return colors
 
 
